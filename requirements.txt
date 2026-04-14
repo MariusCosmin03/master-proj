@@ -1,0 +1,7 @@
+gymnasium>=0.29.0
+numpy<2.0.0,>=1.24.0
+torch>=2.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
+nrgise==0.4.4

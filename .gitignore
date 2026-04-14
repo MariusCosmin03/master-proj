@@ -1,0 +1,14 @@
+__pycache__
+models/*
+
+# Allow this specific path
+!models/idc_only/
+models/idc_only/**
+!models/idc_only/logs/
+!models/idc_only/logs/**
+
+*.zip
+*.pkl
+.vscode/
+markets/
+*.pt
