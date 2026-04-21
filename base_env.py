@@ -35,7 +35,7 @@ class BaseEnvironment(gym.Env):
         time_delta_seconds: int = 900,
         battery_power_kwh: float = 10.0,
         battery_capacity_kwh: float = 1000.0,
-        max_episode_steps: int = 31 * 96,  # 24 hours with 15 min steps
+        max_episode_steps: int = 7 * 96,  # 24 hours with 15 min steps
         start_date: pd.Timestamp = pd.Timestamp("2024-01-01 00:00:00"),
         ):
         super(BaseEnvironment, self).__init__()
@@ -70,7 +70,7 @@ class BaseEnvironment(gym.Env):
         # Market state:
         # - Base features (5): time step, time of day, day of week
         # - Observations(3): soc, fixed_power_balance, fixed_power_contribution_per_component["battery"]
-        obs_dim = 8 #(pending_charge_volume, pending_charge_cost)
+        obs_dim = 7 #(pending_charge_volume, pending_charge_cost)
         self.observation_space = spaces.Box(
             low = -np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
         )
@@ -78,12 +78,17 @@ class BaseEnvironment(gym.Env):
 
     def reset(self, *, seed: Optional[int] = None):
         super().reset(seed=seed)
+        if seed is not None:
+            np.random.seed(seed)
+
         self._current_step = 0
 
         energy_state = self.energy_system.reset()
         
-        market_info["soc"] = energy_state["components_states"]["battery"]["soc"]
+        market_info = {}
+        market_info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
         market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
+        market_info["initial_soc"] = energy_state["components_states"]["battery"]["soc"]
 
         assert 0.4 <= energy_state["components_states"]["battery"]["soc"] <= 0.6, \
         f"Battery SoC did not reset: {energy_state['components_states']['battery']['soc']}"
@@ -93,7 +98,7 @@ class BaseEnvironment(gym.Env):
         # obs = np.zeros(self.observation_space.shape, dtype=np.float64)  # Placeholder for initial observation
         info = {"energy_state": energy_state}
     
-        return obs, info
+        return obs, market_info
 
     def step(self, action:np.ndarray):
 
@@ -101,15 +106,25 @@ class BaseEnvironment(gym.Env):
         # 2. Step the EnergySystem with the physical set-point -> energy state + reward
         power_contribution_per_component, energy_state, energy_system_done = self.energy_system.simulate_one_time_step({"battery":action})
         
-        market_info["soc"] = energy_state["components_states"]["battery"]["soc"]
-        market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
-        market_info["norm_step"] = self._current_step / self.max_episode_steps
+        market_info = {}
+        if not energy_system_done:
+            market_info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
+            market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
+            market_info["norm_step"] = self._current_step / self.max_episode_steps
+        else:
+            market_info["soc"] = -1.0  # Indicate terminal state with invalid SoC
+            market_info["fixed_power_balance"] = 0
+            market_info["norm_step"] = 0
 
         reward = self._calculate_reward(energy_state)
+        
         next_obs = self._build_observation(energy_state, )
         self._current_step += 1
+        terminated = energy_system_done
+        truncated = self._current_step >= self.max_episode_steps
+        
 
-        return next_obs, reward, energy_system_done, False, market_info # state, reward, done, truncated, info
+        return next_obs, reward, energy_system_done, truncated, market_info # state, reward, done, truncated, info
     
 
     def _calculate_reward(self, energy_state):
@@ -129,7 +144,12 @@ class BaseEnvironment(gym.Env):
         Flatten and concatenate energy and market states into a single vector.
         """
 
-        timestamp : pd.Timestamp = self.energy_system._time_index.index[self.time_step]
+        if energy_state is None:
+            return np.zeros(self.observation_space.shape, dtype=np.float64)  # Placeholder for observation when energy state is not available
+        
+        # step_idx = min(self._current_step, len(self.energy_system._time_index) - 1)
+        timestamp = pd.Timestamp(self.energy_system._time_index[self._current_step])
+        timestamp : pd.Timestamp = pd.Timestamp(self.energy_system._time_index[self._current_step])
         norm_step = self._current_step / self.max_episode_steps
         
         # Add time features (e.g., time of day, day of week)
@@ -141,16 +161,15 @@ class BaseEnvironment(gym.Env):
         day_sin = np.sin(2 * np.pi * day_of_week / 7)
         day_cos = np.cos(2 * np.pi * day_of_week / 7)
 
-
         energy_obs = np.array(
-            [energy_state["components_states"]["battery"]["soc"], 
-             energy_state["fixed_power_balance"],
-             energy_state["fixed_power_contribution_per_component"]["battery"],
-             norm_step, hour_sin, hour_cos, day_sin, day_cos,
+            [float(energy_state["components_states"]["battery"]["soc"]), 
+             float(energy_state["fixed_power_balance"]),
+             # energy_state["fixed_power_contribution_per_component"]["battery"],
+             
              ], dtype=np.float64
         )
         energy_obs = energy_obs.flatten()
-        
+        energy_obs = np.concatenate([energy_obs, [norm_step, hour_sin, hour_cos, day_sin, day_cos]])
      
         return energy_obs
 
