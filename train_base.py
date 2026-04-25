@@ -11,7 +11,6 @@ This script demonstrates how to:
 import numpy as np
 import pandas as pd
 from stable_baselines3 import PPO
-from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -23,9 +22,6 @@ from base_env import BaseEnvironment
 
 
 from nrgise import EnergySystem, Grid, StorageSystemEnergyReservoir
-from nrgise.forecaster import DataProfileForecaster
-
-from training_callback import TradingCallback
 
 
 STORAGE_POWER = 200.0  # kWh
@@ -245,7 +241,6 @@ def evaluate_agent(
 ) -> Dict[str, List[float]]:
     episode_returns = []      # sum of rewards over the episode
     episode_mean_rewards = [] # per-step average reward
-    episode_revenues = []
     episode_socs = []
 
     for episode in range(n_episodes):
@@ -308,23 +303,33 @@ def plot_results(results: Dict, save_path: Optional[str] = None):
     """Plot evaluation results."""
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
+    # ── Top-left: Episode Return with rolling mean ──────────────────────────
     ax1 = axes[0, 0]
-    ax2 = ax1.twinx()
-
-    ax1.plot(results['returns'], marker='o', color='steelblue', label='Episode Return')
-    ax1.axhline(y=results['mean_return'], color='blue', linestyle='--', label='Mean Return')
-    ax1.set_ylabel('Episode Return', color='steelblue')
-
-    ax2.plot(results['mean_rewards'], marker='x', color='orange', alpha=0.6, label='Mean Reward/step')
-    ax2.set_ylabel('Mean Reward / Step', color='orange')
-
+    returns = results['returns']
+    ax1.plot(returns, marker='o', color='steelblue', alpha=0.6, label='Episode Return')
+    ax1.axhline(y=results['mean_return'], color='blue', linestyle='--', label=f"Mean ({results['mean_return']:.1f})")
+    window = max(1, len(returns) // 5)
+    if len(returns) >= window:
+        rolling = np.convolve(returns, np.ones(window) / window, mode='valid')
+        ax1.plot(range(window - 1, len(returns)), rolling, color='red', linewidth=2, label=f'Rolling mean (w={window})')
     ax1.set_xlabel('Episode')
-    ax1.set_title('Episode Return vs Mean Reward/Step')
-    ax1.legend(loc='upper left')
-    ax2.legend(loc='upper right')
+    ax1.set_ylabel('Episode Return')
+    ax1.set_title('Episode Return over Evaluation')
+    ax1.legend()
     ax1.grid(True, alpha=0.3)
-        
-    # SOC evolution (first episode)
+
+    # ── Top-right: Return distribution ─────────────────────────────────────
+    ax2 = axes[0, 1]
+    ax2.hist(returns, bins=max(5, len(returns) // 3), color='steelblue', edgecolor='black', alpha=0.7)
+    ax2.axvline(x=results['mean_return'], color='blue', linestyle='--',
+                label=f"Mean: {results['mean_return']:.1f} ± {results['std_return']:.1f}")
+    ax2.set_xlabel('Episode Return')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Return Distribution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # ── Bottom-left: SOC evolution (first episode) ──────────────────────────
     if results['socs']:
         axes[1, 0].plot(results['socs'][0], color='orange')
         axes[1, 0].set_xlabel('Time Step')
@@ -332,16 +337,16 @@ def plot_results(results: Dict, save_path: Optional[str] = None):
         axes[1, 0].set_title('SOC Evolution (First Episode)')
         axes[1, 0].set_ylim([0, 1])
         axes[1, 0].grid(True, alpha=0.3)
-    
-    # Revenue distribution
-    # axes[1, 1].hist(results['revenues'], bins=20, color='skyblue', edgecolor='black')
-    # axes[1, 1].axvline(x=results['mean_revenue'], color='r', linestyle='--', 
-    #                    label=f'Mean: €{results["mean_revenue"]:.2f}')
-    # axes[1, 1].set_xlabel('Revenue (€)')
-    # axes[1, 1].set_ylabel('Frequency')
-    # axes[1, 1].set_title('Revenue Distribution')
-    # axes[1, 1].legend()
-    # axes[1, 1].grid(True, alpha=0.3)
+
+    # ── Bottom-right: SOC evolution (all episodes, faded) ───────────────────
+    ax4 = axes[1, 1]
+    for soc_trace in results['socs']:
+        ax4.plot(soc_trace, color='orange', alpha=0.3, linewidth=0.8)
+    ax4.set_xlabel('Time Step')
+    ax4.set_ylabel('State of Charge')
+    ax4.set_title('SOC Evolution (All Episodes)')
+    ax4.set_ylim([0, 1])
+    ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
     

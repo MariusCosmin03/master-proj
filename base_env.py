@@ -4,8 +4,6 @@ from datetime import timedelta
 import numpy as np
 from pyparsing import Optional
 
-from markets_wrapper import MarketsWrapper
-
 # Prefer gymnasium if available (SB3 supports it), fallback to gym
 try:
     import gymnasium as gym
@@ -67,9 +65,8 @@ class BaseEnvironment(gym.Env):
         #  - soc(1) + pv_output_kw(1) + 1
     
 
-        # Market state:
-        # - Base features (5): time step, time of day, day of week
-        # - Observations(3): soc, fixed_power_balance, fixed_power_contribution_per_component["battery"]
+        # State generic:
+        # - Temporal features (5): time step, time of day, day of week
         obs_dim = 7 #(pending_charge_volume, pending_charge_cost)
         self.observation_space = spaces.Box(
             low = -np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
@@ -85,20 +82,18 @@ class BaseEnvironment(gym.Env):
 
         energy_state = self.energy_system.reset()
         
-        market_info = {}
-        market_info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
-        market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
-        market_info["initial_soc"] = energy_state["components_states"]["battery"]["soc"]
+        info = {}
+        info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
+        info["fixed_power_balance"] = energy_state["fixed_power_balance"]
+        info["initial_soc"] = energy_state["components_states"]["battery"]["soc"]
 
         assert 0.4 <= energy_state["components_states"]["battery"]["soc"] <= 0.6, \
         f"Battery SoC did not reset: {energy_state['components_states']['battery']['soc']}"
 
         
         obs = self._build_observation(energy_state)
-        # obs = np.zeros(self.observation_space.shape, dtype=np.float64)  # Placeholder for initial observation
-        info = {"energy_state": energy_state}
     
-        return obs, market_info
+        return obs, info
 
     def step(self, action:np.ndarray):
 
@@ -106,15 +101,15 @@ class BaseEnvironment(gym.Env):
         # 2. Step the EnergySystem with the physical set-point -> energy state + reward
         power_contribution_per_component, energy_state, energy_system_done = self.energy_system.simulate_one_time_step({"battery":action})
         
-        market_info = {}
+        info = {}
         if not energy_system_done:
-            market_info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
-            market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
-            market_info["norm_step"] = self._current_step / self.max_episode_steps
+            info["soc"] = float(energy_state["components_states"]["battery"]["soc"])
+            info["fixed_power_balance"] = energy_state["fixed_power_balance"]
+            info["norm_step"] = self._current_step / self.max_episode_steps
         else:
-            market_info["soc"] = -1.0  # Indicate terminal state with invalid SoC
-            market_info["fixed_power_balance"] = 0
-            market_info["norm_step"] = 0
+            info["soc"] = -1.0  # Indicate terminal state with invalid SoC
+            info["fixed_power_balance"] = 0
+            info["norm_step"] = 0
 
         reward = self._calculate_reward(energy_state)
         
@@ -124,31 +119,29 @@ class BaseEnvironment(gym.Env):
         truncated = self._current_step >= self.max_episode_steps
         
 
-        return next_obs, reward, energy_system_done, truncated, market_info # state, reward, done, truncated, info
+        return next_obs, reward, terminated, truncated, info # state, reward, done, truncated, info
     
 
-    def _calculate_reward(self, energy_state):
+    def _calculate_reward(self, energy_state) -> float:
         """
-        Calculate reward based on energy state and market information.
-        For example, reward could be negative cost of energy traded, or a combination of profit and penalties.
+        Calculate reward based on energy state.
         """
         # Placeholder for reward calculation logic
-        # Example: reward = -market_info["current_price"] * action[0]  # Cost of energy traded
-        reward = 0.2
-        return reward
+        # Example: reward = -info["current_price"] * action[0]  # Cost of energy traded
+        reward = float(np.random.rand()) - 0.5
+        return reward * 2
 
     
     
-    def _build_observation(self, energy_state):
+    def _build_observation(self, energy_state) -> np.ndarray:
         """
-        Flatten and concatenate energy and market states into a single vector.
+        Flatten and concatenate energy states into a single vector.
         """
 
         if energy_state is None:
             return np.zeros(self.observation_space.shape, dtype=np.float64)  # Placeholder for observation when energy state is not available
         
         # step_idx = min(self._current_step, len(self.energy_system._time_index) - 1)
-        timestamp = pd.Timestamp(self.energy_system._time_index[self._current_step])
         timestamp : pd.Timestamp = pd.Timestamp(self.energy_system._time_index[self._current_step])
         norm_step = self._current_step / self.max_episode_steps
         
@@ -173,39 +166,6 @@ class BaseEnvironment(gym.Env):
      
         return energy_obs
 
-    
-    def _get_forecast(self):
-        """
-        Get imperfect forecasts for the next few time steps, along with confidence levels.
-        Returns:
-            forecast (np.ndarray): Forecasted values for the next time steps.
-            confidence (np.ndarray): Confidence levels for each forecasted value.
-        """
-
-        future_steps = min(self.forecast_horizon, 
-            len(self.forecaster) - self.current_step - 1)
-        
-        if future_steps <= 0:
-            return np.zeros(self.forecast_horizon), np.zeros(self.forecast_horizon)
-        
-        # True future values
-        true_future = self.forecaster[self.current_step:self.current_step + future_steps]
-
-        # Add forecast noise
-        noise = np.random.randn(future_steps) * self.forecast_noise * true_future
-        forecast = true_future + noise
-
-        # Confidence decreases with time
-        confidence = np.exp(-np.arange(future_steps) * 0.2)
-
-        # Pad if needed
-        if future_steps < self.forecast_horizon:
-            pad_length = self.forecast_horizon - future_steps
-            forecast = np.pad(forecast, (0, pad_length), constant_values=forecast[-1])
-            confidence = np.pad(confidence, (0, pad_length), constant_values=0.1)
-        
-        return forecast, confidence
-    
 
     def render(self, mode='human'):
         pass
