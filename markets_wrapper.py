@@ -17,7 +17,6 @@ class MarketsWrapper:
 
     def __init__(
             self, 
-            initial_balance: float,
             battery_capacity_kwh: float,
             battery_max_power_kwh: float,
             # day_ahead_market, 
@@ -26,7 +25,7 @@ class MarketsWrapper:
             max_steps: int = 96 * 30,  # 7 days with 15 min steps
     ):
         self.idc = intraday_market
-        self.initial_balance = initial_balance
+        # self.initial_balance = initial_balance
         self.battery_capacity_kwh = battery_capacity_kwh
         self.battery_max_power_kwh = battery_max_power_kwh
         # self.daa = day_ahead_market
@@ -119,6 +118,8 @@ class MarketsWrapper:
         price = self.idc.prices_log[timestamp]
         trade = self.idc.realized_trades_log[timestamp]
 
+        return price * trade
+
         if trade < 0:   # charging — defer cost, no immediate reward
             self._pending_charge_cost += price * abs(trade)
             self._pending_charge_volume += abs(trade)
@@ -135,8 +136,8 @@ class MarketsWrapper:
             base_reward = 0.0
 
         # Still add SoC penalty from Option 2 to prevent pinning
-        return base_reward 
-        return price * trade
+        # return base_reward 
+        
     
     def get_total_current_contribution(self):
         # Placeholder for calculating the total current contribution of the agent across all markets
@@ -146,13 +147,13 @@ class MarketsWrapper:
         return 0.0
 
     def _get_idc_market_state(self):
-        state_info = [self.idc.get_price_of_current_time_step() / 85.0]  # Normalize by a reasonable max price
+        state_info = [self.idc.get_price_of_current_time_step()]  # Normalize by a reasonable max price
 
         
         # Price momentum (last 4 intervals) - 1 hour
         if self.idc.time_step >= 4:
             recent_prices = self.idc.data_profile[self.idc.time_step - 4:self.idc.time_step]
-            price_change_1h = (self.idc.get_price_of_current_time_step() - recent_prices[0]) / (recent_prices[0] +1e-8)
+            price_change_1h = (self.idc.get_price_of_current_time_step() - recent_prices.iloc[0]) / (recent_prices.iloc[0] +1e-8)
         else: 
             price_change_1h = 0.0
         state_info = np.append(state_info, price_change_1h)
@@ -160,7 +161,7 @@ class MarketsWrapper:
         # Price momentum (last 12 intervals) - 3 hours
         if self.idc.time_step >= 12:
             recent_prices = self.idc.data_profile[self.idc.time_step - 12:self.idc.time_step]
-            price_change_3h = (self.idc.get_price_of_current_time_step() - recent_prices[0]) / (recent_prices[0] +1e-8)
+            price_change_3h = (self.idc.get_price_of_current_time_step() - recent_prices.iloc[0]) / (recent_prices.iloc[0] +1e-8)
         else: 
             price_change_3h = 0.0
 
@@ -176,7 +177,7 @@ class MarketsWrapper:
         
         # Append normalized forecasts
         idc_forecast, idc_confidence = self.get_idc_forecast()
-        norm_forecast = idc_forecast / 85.0
+        norm_forecast = idc_forecast / (self.idc.data_profile.max() + 1e-8)  # Normalize by max price in profile
         state = np.concatenate([state_info, norm_position, norm_forecast, idc_confidence])
         
         return np.array(state, dtype=np.float32)

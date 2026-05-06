@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+from importlib.resources import as_file, files
 import warnings
 from typing import Optional
 
@@ -120,13 +121,15 @@ def evaluate(
             # ── Pull raw values directly from market logs ──────────────────
             idc   = env.markets.idc
             ts    = idc.time_stamp
-            price = float(idc.prices_log.get(ts, 0.0))
-            trade = float(idc.realized_trades_log.get(ts, 0.0))
+            price = float(info.get("price", 0.0))
+            trade = float(info.get("trade", 0.0))
+            soc = float(info.get("soc", 0.0))
+            power_balance = float(info.get("power_balance", 0.0))  # fallback to obs if not in info
 
             ep["idc_revenue"].append(float(info.get("idc_reward", 0.0)))
             ep["energy_penalty"].append(float(info.get("energy_reward", 0.0)))
-            ep["soc"].append(float(obs[0]))           # soc is obs[0] per _build_observation
-            ep["power_balance"].append(float(obs[1])) # fixed_power_balance is obs[1]
+            ep["soc"].append(soc)           # soc is obs[0] per _build_observation
+            ep["power_balance"].append(power_balance) # fixed_power_balance is obs[1]
             ep["price"].append(price)
             ep["trade"].append(trade)
 
@@ -547,7 +550,18 @@ if __name__ == "__main__":
     # price_profiles = create_sample_price_profiles(days=30, time_delta_seconds=900)
     timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
     
-    idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+    # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+
+    SIM_LENGTH = 4*24 * 7 # one week operation
+
+    csv_path = "preprocessed_idc_prices_2024.csv"
+    # with as_file(res) as csv_path:
+    idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+    idc_prices['prices'] = idc_prices['prices'] / 1000
+    idc_prices = idc_prices.iloc[:, 0] # type: ignore
+
+    idc_prices = idc_prices[0:SIM_LENGTH]
+    idc_price_profile = idc_prices.values
 
     # Configure markets
     print("\n2. Configuring markets...")
@@ -557,7 +571,6 @@ if __name__ == "__main__":
     idc_market = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile, index=timestamps))
     idc_price_forcaster = DataProfileForecaster(idc_price_profile, time_delta_seconds=900)
     markets = MarketsWrapper(
-        initial_balance=10000.0,
         battery_capacity_kwh=STORAGE_CAPACITY,
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market,

@@ -60,7 +60,7 @@ class TradingCallback(BaseCallback):
     def __init__(
         self,
         log_freq:          int   = 96,       # log every N steps (96 = 1 day)
-        window:            int   = 960,      # rolling window size (960 = 10 days)
+        window:            int   = 96*7,      # rolling window size (960 = 10 days)
         battery_capacity_kwh: float = 1000.0,
         verbose:           int   = 0,
     ):
@@ -248,3 +248,7 @@ class TradingCallback(BaseCallback):
             f"C/D/I={charge_pct:.0f}%/{discharge_pct:.0f}%/{idle_pct:.0f}%  |  "
             f"violations={constraint_arr.mean()*100:.1f}%"
         )
+
+
+
+

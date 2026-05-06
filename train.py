@@ -29,7 +29,7 @@ from nrgise.forecaster import DataProfileForecaster
 from training_callback import TradingCallback
 
 
-STORAGE_POWER = 200.0  # kWh
+STORAGE_POWER = 1000.0  # kWh
 STORAGE_CAPACITY = 1000.0  # kW
 START_DATE = pd.Timestamp("2024-01-01 00:00:00")
 TIME_DELTA_SECONDS = 900  # 15 minutes
@@ -64,6 +64,7 @@ def create_env(
 
 def train_ppo_agent(
     env: TradingEnvironment,
+    eval_env: Optional[TradingEnvironment] = None,
     total_timesteps: int = 100_000,
     save_path: str = './models',
     model_name: str = 'ppo_energy_trading',
@@ -113,22 +114,23 @@ def train_ppo_agent(
         vec_env = VecNormalize(
             vec_env,
             norm_obs=True,
-            norm_reward=True,
+            norm_reward=False,
             clip_obs=10.0,
             clip_reward=10.0
         )
     
     # Create evaluation environment
-    eval_env = DummyVecEnv([lambda: create_env(
-        energy_system=env.energy_system,
-        markets=env.markets,
-        forecast_horizon_hours=env.forecast_horizon_hours,
-        time_delta_seconds=env.time_delta_seconds,
-        battery_power_kwh=env.battery_power_kwh,
-        battery_capacity_kwh=env.battery_capacity_kwh,
-        max_episode_steps=env.max_episode_steps,
-        start_date=env.start_date,
-    )])
+    if eval_env is None:
+        eval_env = DummyVecEnv([lambda: create_env(
+            energy_system=env.energy_system,
+            markets=env.markets,
+            forecast_horizon_hours=env.forecast_horizon_hours,
+            time_delta_seconds=env.time_delta_seconds,
+            battery_power_kwh=env.battery_power_kwh,
+            battery_capacity_kwh=env.battery_capacity_kwh,
+            max_episode_steps=env.max_episode_steps,
+            start_date=env.start_date,
+        )])
     if use_vec_normalize:
         eval_env = VecNormalize(
             eval_env,
@@ -163,7 +165,7 @@ def train_ppo_agent(
         vec_env,
         learning_rate=3e-4,
         n_steps=2048,
-        batch_size=64 * 4,  # Increase batch size for better performance
+        batch_size=2048,  # Increase batch size for better performance
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
@@ -172,7 +174,8 @@ def train_ppo_agent(
         vf_coef=0.5,
         max_grad_norm=0.5,
         verbose=verbose,
-        tensorboard_log=f'{save_path}/logs'
+        tensorboard_log=f'{save_path}/logs',
+        device='cpu',
     )
     
     print(f"Starting training for {total_timesteps} timesteps...")
@@ -180,7 +183,7 @@ def train_ppo_agent(
     trading_callback = TradingCallback(
         log_freq=96,
         battery_capacity_kwh=STORAGE_CAPACITY,
-        verbose=1,
+        verbose=verbose,
     )
     # Train the model
     model.learn(
@@ -198,6 +201,8 @@ def train_ppo_agent(
     print(f"Training completed! Model saved to {save_path}/{model_name}_final")
     
     return model
+
+
 
 
 class InfoLoggerCallback(BaseCallback):
@@ -249,7 +254,6 @@ def evaluate_agent(
 ) -> Dict[str, List[float]]:
     episode_returns = []      # sum of rewards over the episode
     episode_mean_rewards = [] # per-step average reward
-    episode_revenues = []
     episode_socs = []
 
     for episode in range(n_episodes):
@@ -274,21 +278,21 @@ def evaluate_agent(
         mean_reward = episode_return / n_steps if n_steps > 0 else 0.0
         episode_returns.append(episode_return)
         episode_mean_rewards.append(mean_reward)
-        episode_revenues.append(info['total_revenue'])
+        # episode_revenues.append(info['total_revenue'])
         episode_socs.append(socs)
 
-        print(
-            f"Episode {episode + 1}/{n_episodes}: "
-            f"Return={episode_return:.2f}  "
-            f"MeanReward/step={mean_reward:.4f}  "
-            f"Steps={n_steps}  "
-            f"Revenue=€{info['total_revenue']:.2f}"
-        )
+        # print(
+        #     f"Episode {episode + 1}/{n_episodes}: "
+        #     f"Return={episode_return:.2f}  "
+        #     f"MeanReward/step={mean_reward:.4f}  "
+        #     f"Steps={n_steps}  "
+        #     f"Revenue=€{info['total_revenue']:.2f}"
+        # )
 
     results = {
         'returns': episode_returns,           # primary metric
         'mean_rewards': episode_mean_rewards, # per-step average for comparison
-        'revenues': episode_revenues,
+        # 'revenues': episode_revenues,
         'socs': episode_socs,
         # episode return stats
         'mean_return': np.mean(episode_returns),
@@ -297,14 +301,14 @@ def evaluate_agent(
         'mean_reward': np.mean(episode_mean_rewards),
         'std_reward': np.std(episode_mean_rewards),
         # revenue stats
-        'mean_revenue': np.mean(episode_revenues),
-        'std_revenue': np.std(episode_revenues),
+        # 'mean_revenue': np.mean(episode_revenues),
+        # 'std_revenue': np.std(episode_revenues),
     }
 
     print(f"\nEvaluation Results ({n_episodes} episodes):")
     print(f"  Episode Return  : {results['mean_return']:.2f} ± {results['std_return']:.2f}")
     print(f"  Mean Reward/step: {results['mean_reward']:.4f} ± {results['std_reward']:.4f}")
-    print(f"  Mean Revenue    : €{results['mean_revenue']:.2f} ± €{results['std_revenue']:.2f}")
+    # print(f"  Mean Revenue    : €{results['mean_revenue']:.2f} ± €{results['std_revenue']:.2f}")
 
     return results
 
@@ -312,23 +316,33 @@ def plot_results(results: Dict, save_path: Optional[str] = None):
     """Plot evaluation results."""
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
+    # ── Top-left: Episode Return with rolling mean ──────────────────────────
     ax1 = axes[0, 0]
-    ax2 = ax1.twinx()
-
-    ax1.plot(results['returns'], marker='o', color='steelblue', label='Episode Return')
-    ax1.axhline(y=results['mean_return'], color='blue', linestyle='--', label='Mean Return')
-    ax1.set_ylabel('Episode Return', color='steelblue')
-
-    ax2.plot(results['mean_rewards'], marker='x', color='orange', alpha=0.6, label='Mean Reward/step')
-    ax2.set_ylabel('Mean Reward / Step', color='orange')
-
+    returns = results['returns']
+    ax1.plot(returns, marker='o', color='steelblue', alpha=0.6, label='Episode Return')
+    ax1.axhline(y=results['mean_return'], color='blue', linestyle='--', label=f"Mean ({results['mean_return']:.1f})")
+    window = max(1, len(returns) // 5)
+    if len(returns) >= window:
+        rolling = np.convolve(returns, np.ones(window) / window, mode='valid')
+        ax1.plot(range(window - 1, len(returns)), rolling, color='red', linewidth=2, label=f'Rolling mean (w={window})')
     ax1.set_xlabel('Episode')
-    ax1.set_title('Episode Return vs Mean Reward/Step')
-    ax1.legend(loc='upper left')
-    ax2.legend(loc='upper right')
+    ax1.set_ylabel('Episode Return')
+    ax1.set_title('Episode Return over Evaluation')
+    ax1.legend()
     ax1.grid(True, alpha=0.3)
-        
-    # SOC evolution (first episode)
+
+    # ── Top-right: Return distribution ─────────────────────────────────────
+    ax2 = axes[0, 1]
+    ax2.hist(returns, bins=max(5, len(returns) // 3), color='steelblue', edgecolor='black', alpha=0.7)
+    ax2.axvline(x=results['mean_return'], color='blue', linestyle='--',
+                label=f"Mean: {results['mean_return']:.1f} ± {results['std_return']:.1f}")
+    ax2.set_xlabel('Episode Return')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Return Distribution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # ── Bottom-left: SOC evolution (first episode) ──────────────────────────
     if results['socs']:
         axes[1, 0].plot(results['socs'][0], color='orange')
         axes[1, 0].set_xlabel('Time Step')
@@ -336,16 +350,16 @@ def plot_results(results: Dict, save_path: Optional[str] = None):
         axes[1, 0].set_title('SOC Evolution (First Episode)')
         axes[1, 0].set_ylim([0, 1])
         axes[1, 0].grid(True, alpha=0.3)
-    
-    # Revenue distribution
-    axes[1, 1].hist(results['revenues'], bins=20, color='skyblue', edgecolor='black')
-    axes[1, 1].axvline(x=results['mean_revenue'], color='r', linestyle='--', 
-                       label=f'Mean: €{results["mean_revenue"]:.2f}')
-    axes[1, 1].set_xlabel('Revenue (€)')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].set_title('Revenue Distribution')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+
+    # ── Bottom-right: SOC evolution (all episodes, faded) ───────────────────
+    ax4 = axes[1, 1]
+    for soc_trace in results['socs']:
+        ax4.plot(soc_trace, color='orange', alpha=0.3, linewidth=0.8)
+    ax4.set_xlabel('Time Step')
+    ax4.set_ylabel('State of Charge')
+    ax4.set_title('SOC Evolution (All Episodes)')
+    ax4.set_ylim([0, 1])
+    ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
@@ -356,9 +370,88 @@ def plot_results(results: Dict, save_path: Optional[str] = None):
     plt.show()
 
 
-def generate_prices(base_price: float, price_volatility: float, max_steps: int) -> np.ndarray:
+def continue_training(
+    model_path: str,
+    env,
+    total_timesteps: int = 1_000_000,
+    save_dir: str = "models/continued",
+    checkpoint_freq: int = 50_000,
+    eval_env=None,
+    reset_num_timesteps: bool = False,  # False = continues step count from checkpoint
+):
+    """
+    Load an existing PPO model and continue training.
+
+    Args:
+        model_path:          Path to saved model (.zip)
+        env:                 Training environment instance
+        total_timesteps:     Additional timesteps to train for
+        save_dir:            Directory to save new checkpoints
+        checkpoint_freq:     Save a checkpoint every N steps
+        eval_env:            Optional separate env for EvalCallback
+        reset_num_timesteps: If True, resets step counter (affects LR schedule)
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Load existing model, swap in the new env
+    model = PPO.load(
+        model_path,
+        env=env,
+        device="cpu",
+    )
+
+    print(f"Loaded model from: {model_path}")
+    print(f"Resuming from step: {model.num_timesteps}")
+
+    # Build callbacks
+    callbacks = [
+        CheckpointCallback(
+            save_freq=checkpoint_freq,
+            save_path=save_dir,
+            name_prefix="ppo_continued",
+            save_replay_buffer=False,
+            save_vecnormalize=True,
+        )
+    ]
+
+    if eval_env is not None:
+        callbacks.append(
+            EvalCallback(
+                eval_env,
+                best_model_save_path=os.path.join(save_dir, "best"),
+                log_path=os.path.join(save_dir, "eval_logs"),
+                eval_freq=checkpoint_freq,
+                deterministic=True,
+                render=False,
+            )
+        )
+
+    callbacks.append(TradingCallback(
+        log_freq=96,
+        battery_capacity_kwh=STORAGE_CAPACITY,
+        verbose=0,
+    ))
+
+    # Continue training
+    model.learn(
+        total_timesteps=total_timesteps,
+        reset_num_timesteps=reset_num_timesteps,
+        callback=callbacks,
+        progress_bar=True,
+        tb_log_name="ppo_continued_run",
+    )
+
+    # Save final model
+    final_path = os.path.join(save_dir, "ppo_final")
+    model.save(final_path)
+    print(f"Saved final model to: {final_path}")
+
+    return model
+
+
+def generate_prices(base_price: float, price_volatility: float, max_steps: int, seed: int = 42) -> np.ndarray:
         """Generate synthetic energy prices with daily and weekly patterns."""
-        np.random.seed(42)
+        np.random.seed(seed)
         
         t = np.arange(max_steps)
         
@@ -376,7 +469,7 @@ def generate_prices(base_price: float, price_volatility: float, max_steps: int) 
         prices = np.maximum(prices, 10.0)  # Floor price
         
         
-        return prices
+        return prices / 1000.  # Convert to €/kWh
 
 def main():
     """Main training pipeline."""
@@ -391,7 +484,7 @@ def main():
     timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
     
     idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
-    idc_price_profile = idc_price_profile / 1000.  # Convert to €/kWh
+    idc_price_profile_eval = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS, seed=999)
     # Configure markets
     print("\n2. Configuring markets...")
     
@@ -399,12 +492,24 @@ def main():
     
     idc_market = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile, index=timestamps))
     idc_price_forcaster = DataProfileForecaster(idc_price_profile, time_delta_seconds=900)
+    
+    idc_market_eval = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile_eval, index=timestamps))
+    idc_price_forcaster_eval = DataProfileForecaster(idc_price_profile_eval, time_delta_seconds=900)
+    
+    
     markets = MarketsWrapper(
-        initial_balance=10000.0,
         battery_capacity_kwh=STORAGE_CAPACITY,
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market,
         idc_price_forcaster=idc_price_forcaster,  # Placeholder, can be set to actual forecaster instance,
+        max_steps=MAX_EPISODE_STEPS
+    )
+
+    markets_eval = MarketsWrapper(
+        battery_capacity_kwh=STORAGE_CAPACITY,
+        battery_max_power_kwh=STORAGE_POWER,
+        intraday_market=idc_market_eval,
+        idc_price_forcaster=idc_price_forcaster_eval,  # Placeholder, can be set to actual forecaster instance,
         max_steps=MAX_EPISODE_STEPS
     )
 
@@ -419,12 +524,33 @@ def main():
                                            eta_charge=1,
                                            eta_discharge=1,
                                            )
+
     
     energy_system.add_components(grid, battery)
-   
     
-    
-    
+    energy_system_eval = EnergySystem(time_index=timestamps)
+    grid_eval = Grid(label='grid_eval')
+    battery_eval = StorageSystemEnergyReservoir(label='battery',
+                                                time_delta_seconds=900,
+                                                nom_power=STORAGE_POWER,
+                                                capacity=STORAGE_CAPACITY,
+                                                initial_soc=0.5,
+                                                eta_charge=1,
+                                                eta_discharge=1,
+                                                )
+    energy_system_eval.add_components(grid_eval, battery_eval)
+
+    eval_env = create_env(
+        energy_system=energy_system_eval,
+        markets=markets_eval,
+        forecast_horizon_hours=3,
+        time_delta_seconds = TIME_DELTA_SECONDS,
+        battery_power_kwh=STORAGE_POWER,
+        battery_capacity_kwh=STORAGE_CAPACITY,
+        max_episode_steps=MAX_EPISODE_STEPS,  # 24 hours with 15 min steps
+        start_date=START_DATE,
+    )
+
     # Create environment
     print("\n3. Creating environment...")
     env = create_env(
@@ -449,29 +575,40 @@ def main():
 
     # Train agent
     print("\n5. Training PPO agent...")
+
+    # model = continue_training(
+    #     model_path="models/idc_only/best/best_model.zip",
+    #     env=env,
+    #     eval_env=eval_env,
+    #     total_timesteps=2_000_000,
+    #     save_dir="models/continued",
+    # )
+        
+    
     model = train_ppo_agent(
         env=env,
-        total_timesteps=2_000_000,  # Increase for better results
+        eval_env=eval_env,
+        total_timesteps=10_000_000,  # Increase for better results
         save_path='./models/idc_only',
         model_name='ppo_trading',
-        eval_freq=10_000,
-        checkpoint_freq=50_000,
-        use_vec_normalize=True,
+        eval_freq=50_000,
+        checkpoint_freq=100_000,
+        use_vec_normalize=False,
         verbose=0
     )
     
-    # # Evaluate agent
-    # print("\n6. Evaluating trained agent...")
-    # results = evaluate_agent(
-    #     model=model,
-    #     env=env,
-    #     n_episodes=10,
-    #     render=False
-    # )
+    # Evaluate agent
+    print("\n6. Evaluating trained agent...")
+    results = evaluate_agent(
+        model=model,
+        env=env,
+        n_episodes=10,
+        render=False
+    )
     
-    # # Plot results
-    # print("\n7. Plotting results...")
-    # plot_results(results, save_path='./models/idc_only/evaluation_results.png')
+    # Plot results
+    print("\n7. Plotting results...")
+    plot_results(results, save_path='./models/idc_only/evaluation_results.png')
     
     print("\n" + "=" * 60)
     print("Training pipeline completed!")
