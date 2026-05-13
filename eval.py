@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
+from stable_baselines3 import SAC
 
 from environment import TradingEnvironment
 from train import MAX_EPISODE_STEPS, START_DATE, STORAGE_CAPACITY, STORAGE_POWER, TIME_DELTA_SECONDS, create_env, generate_prices
@@ -126,13 +127,19 @@ def evaluate(
             soc = float(info.get("soc", 0.0))
             power_balance = float(info.get("power_balance", 0.0))  # fallback to obs if not in info
 
-            ep["idc_revenue"].append(float(info.get("idc_reward", 0.0)))
+            ep["idc_revenue"].append(price * trade)  # Use price × trade for revenue to ensure consistency
             ep["energy_penalty"].append(float(info.get("energy_reward", 0.0)))
             ep["soc"].append(soc)           # soc is obs[0] per _build_observation
             ep["power_balance"].append(power_balance) # fixed_power_balance is obs[1]
             ep["price"].append(price)
             ep["trade"].append(trade)
-
+        
+        ep["price"].append(np.partition(ep["price"], -5)[-5])  # Final step price
+        ep["trade"].append((ep["soc"][-1] * STORAGE_CAPACITY))  # No trade at final step
+        ep["idc_revenue"].append(ep["price"][-1] * ep["trade"][-1])  # Final step revenue
+        ep["soc"].append(0.0)  # Final step SoC
+        ep["energy_penalty"].append(0.0)  # No penalty at final step
+        ep["power_balance"].append(0.0)  # No imbalance at final step
         all_episodes.append({k: np.array(v) for k, v in ep.items()})
 
     # ── Average trajectories across episodes ──────────────────────────────
@@ -550,18 +557,18 @@ if __name__ == "__main__":
     # price_profiles = create_sample_price_profiles(days=30, time_delta_seconds=900)
     timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
     
-    # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+    idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
 
     SIM_LENGTH = 4*24 * 7 # one week operation
 
-    csv_path = "preprocessed_idc_prices_2024.csv"
-    # with as_file(res) as csv_path:
-    idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
-    idc_prices['prices'] = idc_prices['prices'] / 1000
-    idc_prices = idc_prices.iloc[:, 0] # type: ignore
+    # csv_path = "preprocessed_idc_prices_2024.csv"
+    # # with as_file(res) as csv_path:
+    # idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+    # idc_prices['prices'] = idc_prices['prices'] / 1000
+    # idc_prices = idc_prices.iloc[:, 0] # type: ignore
 
-    idc_prices = idc_prices[0:SIM_LENGTH]
-    idc_price_profile = idc_prices.values
+    # idc_prices = idc_prices[0:SIM_LENGTH]
+    # idc_price_profile = idc_prices.values
 
     # Configure markets
     print("\n2. Configuring markets...")
@@ -613,7 +620,7 @@ if __name__ == "__main__":
     if not os.path.exists(MODEL_PATH + ".zip"):
         raise FileNotFoundError(f"No model found at {MODEL_PATH}.zip")
 
-    model = PPO.load(MODEL_PATH, env=env)
+    model = SAC.load(MODEL_PATH, env=env)
     print(f"✓  Loaded model from {MODEL_PATH}")
 
     # ── 5. Run evaluation ─────────────────────────────────────────────────

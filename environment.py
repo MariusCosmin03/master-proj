@@ -74,7 +74,7 @@ class TradingEnvironment(gym.Env):
         # - IDC-specific features (16): current price(1), 1h momentum(1), 3h momentum(1), normalized position(12)
         # - Forecasts(24): 12 future price forecasts + confidence levels (24)
         # - Alternate Reward Function(2): Pending charge volume and cost (2)
-        obs_dim = 2 + (1+ 2 * 2) + (3 + 12) + 24 + 2 
+        obs_dim = 1 + (1+ 2 * 2) + (3 + 0) + (12 + 0) # + 2
         self.observation_space = spaces.Box(
             low = -np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
         )
@@ -82,7 +82,7 @@ class TradingEnvironment(gym.Env):
 
     def reset(self, *, seed: Optional[int] = None):
         super().reset(seed=seed)
-        self._current_step = 0
+        self.current_step = 0
 
         energy_state = self.energy_system.reset()
         market_state, market_info = self.markets.reset()
@@ -116,8 +116,7 @@ class TradingEnvironment(gym.Env):
         # 2. Step the EnergySystem with the physical set-point -> energy state + reward
         power_contribution_per_component, energy_state, energy_system_done = self.energy_system.simulate_one_time_step({"battery":physical_change})
         energy_reward = 0
-        # if power_contribution_per_component["battery"] != physical_change:
-        #     energy_reward = -10000
+
         actual_change = power_contribution_per_component["battery"]
         execution_gap = abs(actual_change - physical_change)        # kWh
         max_power = self.battery_power_kwh
@@ -125,17 +124,17 @@ class TradingEnvironment(gym.Env):
         # Penalty scales with how badly the battery failed to execute
         # Max penalty ≈ 2× avg step revenue, not 240×
         soc_violation = 0
-        curr_price = self.markets.idc.get_price_of_current_time_step()
-        market_reward = curr_price * actual_change  # Still reward based on what was actually executed
+        price = self.markets.idc.get_price_of_current_time_step()
+        curr_price_norm = self.markets.get_idc_price_normalized()
+
+        market_reward = curr_price_norm * actual_change  # Still reward based on what was actually executed
         if execution_gap > 0.0001:  # Allow small execution errors
-            energy_reward = -10 # make smaller
+            # energy_reward = -10 # make smaller
             soc_violation = 1
         else:
             energy_reward = 0.0
 
         soc = energy_state["components_states"]["battery"]["soc"]
-        price = self.markets.idc.get_price_of_current_time_step()
-        # price_norm = (price - 85) / 15   # rough normalisation around mean, adjust to your data
 
         # Soft quadratic SoC penalty — activates near limits, zero in safe zone
         # soc_penalty = 0.0
@@ -153,6 +152,8 @@ class TradingEnvironment(gym.Env):
 
         # 4. Combine state and reward
         combined_state = self._build_observation(energy_state, market_state)
+
+        # print(combined_state)
         reward = float(energy_reward + market_reward)
         market_info["energy_reward"] = energy_reward
         market_info["idc_reward"] = market_reward
@@ -166,11 +167,11 @@ class TradingEnvironment(gym.Env):
         # print(f"Action: {action[0]:.3f} | Physical: {physical_change:.3f} | Actual: {actual_change:.3f} | SoC: {soc:.3f}")
 
 
-        self._current_step += 1
-        done = self._current_step >= self.max_episode_steps -1  or market_done or energy_system_done
+        self.current_step += 1
+        done = self.current_step >= self.max_episode_steps -1  or market_done or energy_system_done
         if done:
-            # print(f"Episode done at step {self._current_step}. Market done: {market_done}, Energy system done: {energy_system_done}")
-            reward = reward + soc * self.battery_capacity_kwh * price / 2  # Final reward bonus for remaining SoC and power balance at episode end
+            # print(f"Episode done at step {self.current_step}. Market done: {market_done}, Energy system done: {energy_system_done}")
+            reward = reward + soc * self.battery_capacity_kwh * price   # Final reward bonus for remaining SoC and power balance at episode end
         market_info["final_reward"] = reward
         return combined_state, reward, done, False, market_info # state, reward, done, truncated, info
     
@@ -181,7 +182,7 @@ class TradingEnvironment(gym.Env):
         The net traded volume determines wheter the battery needs to 
         charge(buying energy) or discharge(selling).
         """
-        # start_time = self.start_date + timedelta(minutes=15 * self._current_step)
+        # start_time = self.start_date + timedelta(minutes=15 * self.current_step)
         
         power_contribution = self.markets.get_total_current_contribution()
         
@@ -192,13 +193,15 @@ class TradingEnvironment(gym.Env):
         Flatten and concatenate energy and market states into a single vector.
         """
         soc = energy_state["components_states"]["battery"]["soc"]
-        fixed_power_balance = energy_state["fixed_power_balance"]
+        # fixed_power_balance = energy_state["fixed_power_balance"]
+        # fixed_power_balance_norm = fixed_power_balance / self.battery_capacity_kwh
 
+        
         soc_normalized = (soc - 0.5) * 2  # 0.1 → -0.8, 0.9 → 0.8
         
         energy_obs = np.array(
             [
-                soc_normalized, fixed_power_balance,
+                soc_normalized, # fixed_power_balance_norm,
             #  energy_state["fixed_power_contribution_per_component"]["battery"],
              ], dtype=np.float64
         )

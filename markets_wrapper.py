@@ -37,6 +37,10 @@ class MarketsWrapper:
                                       # daa = daa_price_forecaster
                                       )
         
+
+        self.price_min = self.idc.data_profile.min()
+        self.price_max = self.idc.data_profile.max()
+
         self.time_step = 0
         self.max_steps = max_steps
     
@@ -74,8 +78,9 @@ class MarketsWrapper:
         self._pending_charge_cost = 0.0
         self._pending_charge_volume = 0.0
         state = self.get_state()
-        return np.insert(state, 8, np.zeros(12)), {}  # initial state, info 
+        # return np.insert(state, 8, np.zeros(12)), {}  # initial state, info 
                                 # include 0 in place for the normalized position which will be filled in the first step
+        return state, {}  # initial state, info
 
     def get_state(self):
         """
@@ -104,8 +109,9 @@ class MarketsWrapper:
         state_info = np.append(state_info, 
                                [hour_sin, hour_cos, 
                                 day_sin, day_cos,
-                                self._pending_charge_volume / (self.battery_capacity_kwh + 1e-8), 
-                                self._pending_charge_cost])
+                                # self._pending_charge_volume / (self.battery_capacity_kwh + 1e-8), 
+                                # self._pending_charge_cost
+                                ])
 
         if self.idc is not None:
             idc_state = self._get_idc_market_state()
@@ -118,7 +124,9 @@ class MarketsWrapper:
         price = self.idc.prices_log[timestamp]
         trade = self.idc.realized_trades_log[timestamp]
 
-        return price * trade
+        curr_price_norm = 2 * (price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+        
+        return curr_price_norm * trade
 
         if trade < 0:   # charging — defer cost, no immediate reward
             self._pending_charge_cost += price * abs(trade)
@@ -138,6 +146,11 @@ class MarketsWrapper:
         # Still add SoC penalty from Option 2 to prevent pinning
         # return base_reward 
         
+
+    def get_idc_price_normalized(self):
+        curr_price = self.idc.get_price_of_current_time_step()
+        curr_price_norm = 2 * (curr_price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+        return curr_price_norm
     
     def get_total_current_contribution(self):
         # Placeholder for calculating the total current contribution of the agent across all markets
@@ -147,7 +160,10 @@ class MarketsWrapper:
         return 0.0
 
     def _get_idc_market_state(self):
-        state_info = [self.idc.get_price_of_current_time_step()]  # Normalize by a reasonable max price
+        curr_price = self.idc.get_price_of_current_time_step()
+        curr_price_norm = 2 * (curr_price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+
+        state_info = [curr_price_norm]  # Normalize by a reasonable max price
 
         
         # Price momentum (last 4 intervals) - 1 hour
@@ -168,7 +184,7 @@ class MarketsWrapper:
         state_info = np.append(state_info, price_change_3h)
 
         # Market-specific features
-        norm_position = self.idc.get_cleared_schedule().iloc[:12] * (4 / self.battery_max_power_kwh)
+        # norm_position = self.idc.get_cleared_schedule().iloc[:12] * (4 / self.battery_max_power_kwh)
         
         
         # norm_pending = self.idc.get_revenues_per_time_step() / self.initial_balance
@@ -177,8 +193,11 @@ class MarketsWrapper:
         
         # Append normalized forecasts
         idc_forecast, idc_confidence = self.get_idc_forecast()
-        norm_forecast = idc_forecast / (self.idc.data_profile.max() + 1e-8)  # Normalize by max price in profile
-        state = np.concatenate([state_info, norm_position, norm_forecast, idc_confidence])
+        # idc_forecast = np.insert(idc_forecast, 0, curr_price)  # Include current price for normalization
+        # norm_forecast = np.diff(np.log(idc_forecast))
+        # norm_forecast = 2 * (idc_forecast - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+        norm_forecast = idc_forecast
+        state = np.concatenate([state_info, norm_forecast, ])# idc_confidence])
         
         return np.array(state, dtype=np.float32)
     

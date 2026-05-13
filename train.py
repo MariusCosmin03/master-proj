@@ -10,7 +10,7 @@ This script demonstrates how to:
 
 import numpy as np
 import pandas as pd
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CheckpointCallback
@@ -203,6 +203,152 @@ def train_ppo_agent(
     return model
 
 
+def train_sac_agent(
+    env: TradingEnvironment,
+    eval_env: Optional[TradingEnvironment] = None,
+    total_timesteps: int = 100_000,
+    save_path: str = './models',
+    model_name: str = 'sac_energy_trading',
+    eval_freq: int = 5000,
+    checkpoint_freq: int = 10000,
+    use_vec_normalize: bool = True,
+    verbose: int = 1
+) -> SAC:
+    """
+    Train a SAC agent on the energy trading environment.
+    
+    Parameters:
+    -----------
+    env : TradingEnvironment
+        The trading environment
+    total_timesteps : int
+        Total number of training steps
+    save_path : str
+        Directory to save models and logs
+    model_name : str
+        Name for the saved model
+    eval_freq : int
+        Frequency of evaluation (in timesteps)
+    checkpoint_freq : int
+        Frequency of saving checkpoints
+    use_vec_normalize : bool
+        Whether to normalize observations and rewards
+    verbose : int
+        Verbosity level
+        
+    Returns:
+    --------
+    model : SAC
+        Trained SAC model
+    """
+    
+    # Create directories
+    os.makedirs(save_path, exist_ok=True)
+    os.makedirs(f'{save_path}/checkpoints', exist_ok=True)
+    os.makedirs(f'{save_path}/logs', exist_ok=True)
+    
+    # Wrap in vectorized environment
+    vec_env = DummyVecEnv([lambda: env])
+    
+    # Optionally normalize observations and rewards
+    if use_vec_normalize:
+        vec_env = VecNormalize(
+            vec_env,
+            norm_obs=True,
+            norm_reward=False,
+            clip_obs=10.0,
+            clip_reward=10.0
+        )
+    
+    # Create evaluation environment
+    if eval_env is None:
+        eval_env = DummyVecEnv([lambda: create_env(
+            energy_system=env.energy_system,
+            markets=env.markets,
+            forecast_horizon_hours=env.forecast_horizon_hours,
+            time_delta_seconds=env.time_delta_seconds,
+            battery_power_kwh=env.battery_power_kwh,
+            battery_capacity_kwh=env.battery_capacity_kwh,
+            max_episode_steps=env.max_episode_steps,
+            start_date=env.start_date,
+        )])
+    if use_vec_normalize:
+        eval_env = VecNormalize(
+            eval_env,
+            norm_obs=True,
+            norm_reward=False,
+            clip_obs=10.0,
+            training=False,
+        )
+    
+    # Callbacks
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=f'{save_path}/best',
+        log_path=f'{save_path}/logs',
+        eval_freq=eval_freq,
+        deterministic=True,
+        render=False,
+        verbose=verbose
+    )
+    
+    checkpoint_callback = CheckpointCallback(
+        save_freq=checkpoint_freq,
+        save_path=f'{save_path}/checkpoints',
+        name_prefix=model_name,
+        save_replay_buffer=True,      # SAC: persist the replay buffer in checkpoints
+        save_vecnormalize=use_vec_normalize
+    )
+    
+    # Create SAC model
+    # SAC is off-policy: it learns from a replay buffer rather than on-policy rollouts
+    model = SAC(
+        'MlpPolicy',
+        vec_env,
+        learning_rate=3e-4,
+        buffer_size=1_000_000,        # replay buffer capacity
+        learning_starts=10_000,       # steps of random exploration before first update
+        batch_size=256,               # mini-batch size drawn from the replay buffer
+        tau=0.005,                    # soft target-network update coefficient
+        gamma=0.99,
+        train_freq=1,                 # update the model every N environment steps
+        gradient_steps=1,            # gradient updates per environment step
+        ent_coef='auto',              # automatic entropy tuning (SAC hallmark)
+        target_update_interval=1,    # target network update interval (steps)
+        target_entropy='auto',        # target entropy for automatic tuning
+        use_sde=False,                # set True to use State-Dependent Exploration
+        sde_sample_freq=-1,
+        policy_kwargs=dict(net_arch=[256, 256]),
+        verbose=verbose,
+        tensorboard_log=f'{save_path}/logs',
+        device='cpu',
+    )
+    
+    print(f"Starting training for {total_timesteps} timesteps...")
+    
+    trading_callback = TradingCallback(
+        log_freq=96,
+        battery_capacity_kwh=STORAGE_CAPACITY,
+        verbose=verbose,
+    )
+    # Train the model
+    model.learn(
+        total_timesteps=total_timesteps,
+        callback=[eval_callback, checkpoint_callback, trading_callback],
+        progress_bar=True,
+        tb_log_name="sac_run",
+    )
+    
+    # Save final model
+    model.save(f'{save_path}/{model_name}_final')
+    if use_vec_normalize:
+        vec_env.save(f'{save_path}/{model_name}_vecnormalize.pkl')
+    
+    print(f"Training completed! Model saved to {save_path}/{model_name}_final")
+    
+    return model
+ 
+
 
 
 class InfoLoggerCallback(BaseCallback):
@@ -247,7 +393,7 @@ class InfoLoggerCallback(BaseCallback):
         return True   # returning False would stop training early
 
 def evaluate_agent(
-    model: PPO,
+    model,
     env: TradingEnvironment,
     n_episodes: int = 100,
     render: bool = False
@@ -380,7 +526,7 @@ def continue_training(
     reset_num_timesteps: bool = False,  # False = continues step count from checkpoint
 ):
     """
-    Load an existing PPO model and continue training.
+    Load an existing  model and continue training.
 
     Args:
         model_path:          Path to saved model (.zip)
@@ -465,10 +611,10 @@ def generate_prices(base_price: float, price_volatility: float, max_steps: int, 
         random_walk = np.cumsum(np.random.randn(max_steps) * price_volatility)
         
         # Combine components
-        prices = base_price + daily_pattern + weekly_pattern + random_walk
-        prices = np.maximum(prices, 10.0)  # Floor price
-        
-        
+        prices = base_price + daily_pattern  + weekly_pattern + random_walk
+        # prices = np.maximum(prices, 10.0)  # Floor price
+
+
         return prices / 1000.  # Convert to €/kWh
 
 def main():
@@ -494,7 +640,16 @@ def main():
     idc_price_forcaster = DataProfileForecaster(idc_price_profile, time_delta_seconds=900)
     
     idc_market_eval = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile_eval, index=timestamps))
-    idc_price_forcaster_eval = DataProfileForecaster(idc_price_profile_eval, time_delta_seconds=900)
+    idc_price_forcaster_eval = DataProfileForecaster(idc_price_profile_eval, time_delta_seconds=900)    
+
+    # norm_idc_price = 2 * (idc_price_profile - np.min(idc_price_profile)) / (np.max(idc_price_profile) - np.min(idc_price_profile) + 1e-8) - 1
+    # norm_idc_eval_price = 2 * (idc_price_profile_eval - np.min(idc_price_profile_eval)) / (np.max(idc_price_profile_eval) - np.min(idc_price_profile_eval) + 1e-8) - 1
+
+    # idc_market = IdcMarket(price_profile_per_simulation_time_step=pd.Series(norm_idc_price, index=timestamps))    
+    # idc_price_forcaster = DataProfileForecaster(norm_idc_price, time_delta_seconds=900)
+    
+    # idc_market_eval = IdcMarket(price_profile_per_simulation_time_step=pd.Series(norm_idc_eval_price, index=timestamps))
+    # idc_price_forcaster_eval = DataProfileForecaster(norm_idc_eval_price, time_delta_seconds=900)
     
     
     markets = MarketsWrapper(
@@ -585,13 +740,25 @@ def main():
     # )
         
     
-    model = train_ppo_agent(
+    # model = train_ppo_agent(
+    #     env=env,
+    #     eval_env=eval_env,
+    #     total_timesteps=10_000_000,  # Increase for better results
+    #     save_path='./models/idc_only',
+    #     model_name='ppo_trading',
+    #     eval_freq=50_000,
+    #     checkpoint_freq=100_000,
+    #     use_vec_normalize=False,
+    #     verbose=0
+    # )
+
+    model = train_sac_agent(
         env=env,
         eval_env=eval_env,
-        total_timesteps=10_000_000,  # Increase for better results
+        total_timesteps=1_000_000,  # Increase for better results
         save_path='./models/idc_only',
-        model_name='ppo_trading',
-        eval_freq=50_000,
+        model_name='sac_trading',
+        eval_freq=30_000,
         checkpoint_freq=100_000,
         use_vec_normalize=False,
         verbose=0
