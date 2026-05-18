@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from markets.idc_market import IdcMarket, IdcTradeSequence
+from markets.daa_market import DaaMarket, DaaTradeSequence
 from nrgise import Forecaster
 
 
@@ -19,7 +20,7 @@ class MarketsWrapper:
             self, 
             battery_capacity_kwh: float,
             battery_max_power_kwh: float,
-            # day_ahead_market, 
+            day_ahead_market: IdcMarket,
             intraday_market: IdcMarket,
             idc_price_forcaster,
             max_steps: int = 96 * 30,  # 7 days with 15 min steps
@@ -28,7 +29,7 @@ class MarketsWrapper:
         # self.initial_balance = initial_balance
         self.battery_capacity_kwh = battery_capacity_kwh
         self.battery_max_power_kwh = battery_max_power_kwh
-        # self.daa = day_ahead_market
+        self.daa = day_ahead_market
 
         self._pending_charge_cost = 0.0
         self._pending_charge_volume = 0.0
@@ -40,6 +41,11 @@ class MarketsWrapper:
 
         self.price_min = self.idc.data_profile.min()
         self.price_max = self.idc.data_profile.max()
+        self.price_min_daa = self.daa.data_profile.min()
+        self.price_max_daa = self.daa.data_profile.max()
+
+        self.schedule_storage = pd.Series() # Store schedules for each market and time step
+        self.schedule_pv = pd.Series()
 
         self.time_step = 0
         self.max_steps = max_steps
@@ -117,6 +123,10 @@ class MarketsWrapper:
             idc_state = self._get_idc_market_state()
             state_info = np.append(state_info, idc_state)
 
+        if self.daa is not None:
+            daa_state = self._get_daa_market_state()
+            state_info = np.append(state_info, daa_state)
+
         return state_info
     
     def reward(self, time_step) -> float:
@@ -124,9 +134,16 @@ class MarketsWrapper:
         price = self.idc.prices_log[timestamp]
         trade = self.idc.realized_trades_log[timestamp]
 
-        curr_price_norm = 2 * (price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+        curr_price_norm_idc = 2 * (price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
         
-        return curr_price_norm * trade
+
+
+        ################# DAA REWARD OPTION 1: BASED ON REALIZED PROFIT/LOSS #################
+        price_daa = self.daa.prices_log[timestamp]
+        trade_daa = self.daa.realized_trades_log[timestamp]
+
+        curr_price_norm_daa = 2 * (price_daa - self.price_min_daa) / (self.price_max_daa - self.price_min_daa + 1e-8) - 1
+        return curr_price_norm_idc * trade + curr_price_norm_daa * trade_daa
 
         if trade < 0:   # charging — defer cost, no immediate reward
             self._pending_charge_cost += price * abs(trade)
@@ -209,3 +226,6 @@ class MarketsWrapper:
         # Placeholder for retrieving current trades in the intraday market
         return self.idc.get_realized_trades()
     
+    def _get_daa_market_state(self):
+        # Placeholder for retrieving the state of the day-ahead market
+        return np.array([])

@@ -59,8 +59,8 @@ class TradingEnvironment(gym.Env):
         # ----- Action Space -----
         # [idc_volume_kw] over the next 3 hours (12 time steps of 15 min each)
         self.action_space = spaces.Box(
-            low = np.array([-1] * 1, dtype=np.float64),
-            high = np.array([1] * 1, dtype=np.float64),
+            low = np.array([-1] * 2, dtype=np.float64),
+            high = np.array([1] * 2, dtype=np.float64),
             dtype = np.float64
         )
 
@@ -125,9 +125,9 @@ class TradingEnvironment(gym.Env):
         # Max penalty ≈ 2× avg step revenue, not 240×
         soc_violation = 0
         price = self.markets.idc.get_price_of_current_time_step()
-        curr_price_norm = self.markets.get_idc_price_normalized()
+        curr_price_norm_idc = self.markets.get_idc_price_normalized()
 
-        market_reward = curr_price_norm * actual_change  # Still reward based on what was actually executed
+        market_reward = curr_price_norm_idc * actual_change  # Still reward based on what was actually executed
         if execution_gap > 0.0001:  # Allow small execution errors
             # energy_reward = -10 # make smaller
             soc_violation = 1

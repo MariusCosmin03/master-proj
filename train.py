@@ -628,9 +628,21 @@ def main():
     print("\n1. Generating price profiles...")
     # price_profiles = create_sample_price_profiles(days=30, time_delta_seconds=900)
     timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
+
+    csv_path = "preprocessed_idc_prices_2024.csv"
+    # with as_file(res) as csv_path:
+    idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+    idc_prices['prices'] = idc_prices['prices'] / 1000
+    idc_prices = idc_prices.iloc[:, 0] # type: ignore
+
+    idc_prices = idc_prices[0:MAX_EPISODE_STEPS]
+    idc_price_profile = idc_prices.values
     
-    idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
-    idc_price_profile_eval = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS, seed=999)
+    # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+    # idc_price_profile_eval = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS, seed=999)
+    idc_price_profile_eval = idc_price_profile + np.random.normal(0, 0.01, size=idc_price_profile.shape)  # Slightly different profile for evaluation
+    
+    
     # Configure markets
     print("\n2. Configuring markets...")
     

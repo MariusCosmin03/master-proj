@@ -135,7 +135,7 @@ def evaluate(
             ep["trade"].append(trade)
         
         ep["price"].append(np.partition(ep["price"], -5)[-5])  # Final step price
-        ep["trade"].append((ep["soc"][-1] * STORAGE_CAPACITY))  # No trade at final step
+        ep["trade"].append((ep["soc"][-1] * STORAGE_CAPACITY * 4))  # No trade at final step
         ep["idc_revenue"].append(ep["price"][-1] * ep["trade"][-1])  # Final step revenue
         ep["soc"].append(0.0)  # Final step SoC
         ep["energy_penalty"].append(0.0)  # No penalty at final step
@@ -380,6 +380,8 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
     ax_cumrev.plot(t, cum_pen, color=_C["penalty"],  lw=1.2, ls="--", label="Constraint Penalties")
     ax_cumrev.plot(t, cum_net, color=_C["accent"],   lw=2.2, label="Net Profit")
     ax_cumrev.axhline(0, color=_C["grid"], lw=0.8, ls=":")
+    ax_cumrev.axhline(1257.9, color="r", lw=0.8, ls="--", label="Baseline MPC(1257.9€)")
+
     ax_cumrev.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
                      labelcolor=_C["text"], fontsize=8)
     ax_cumrev.yaxis.set_major_formatter(
@@ -561,14 +563,14 @@ if __name__ == "__main__":
 
     SIM_LENGTH = 4*24 * 7 # one week operation
 
-    # csv_path = "preprocessed_idc_prices_2024.csv"
-    # # with as_file(res) as csv_path:
-    # idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
-    # idc_prices['prices'] = idc_prices['prices'] / 1000
-    # idc_prices = idc_prices.iloc[:, 0] # type: ignore
+    csv_path = "preprocessed_idc_prices_2024.csv"
+    # with as_file(res) as csv_path:
+    idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+    idc_prices['prices'] = idc_prices['prices'] / 1000
+    idc_prices = idc_prices.iloc[:, 0] # type: ignore
 
-    # idc_prices = idc_prices[0:SIM_LENGTH]
-    # idc_price_profile = idc_prices.values
+    idc_prices = idc_prices[0:SIM_LENGTH]
+    idc_price_profile = idc_prices.values
 
     # Configure markets
     print("\n2. Configuring markets...")
