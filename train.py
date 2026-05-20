@@ -8,6 +8,8 @@ This script demonstrates how to:
 4. Save and load models
 """
 
+from importlib.resources import as_file
+
 import numpy as np
 import pandas as pd
 from stable_baselines3 import PPO, SAC
@@ -20,6 +22,7 @@ from typing import Dict, List, Optional
 import os
 
 from environment import TradingEnvironment
+from markets.daa_market import DaaMarket
 from markets.idc_market import IdcMarket
 from markets_wrapper import MarketsWrapper
 
@@ -617,6 +620,16 @@ def generate_prices(base_price: float, price_volatility: float, max_steps: int, 
 
         return prices / 1000.  # Convert to €/kWh
 
+
+def load_daa_data(csv_path: str) -> pd.Series:
+    
+    day_ahead_prices = pd.read_csv(csv_path, delimiter=',', index_col=0, parse_dates=True)
+    day_ahead_prices_hourly = day_ahead_prices.resample('h').mean()
+    day_ahead_prices_hourly = day_ahead_prices_hourly/1000  # convert fom €/MWh to €/kWh
+
+    return day_ahead_prices_hourly# .head(MAX_EPISODE_STEPS // 4 + 24)  # 1 day ahead with hourly steps
+
+
 def main():
     """Main training pipeline."""
     
@@ -642,6 +655,17 @@ def main():
     # idc_price_profile_eval = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS, seed=999)
     idc_price_profile_eval = idc_price_profile + np.random.normal(0, 0.01, size=idc_price_profile.shape)  # Slightly different profile for evaluation
     
+
+    day_ahead_prices_hourly = load_daa_data(csv_path)
+    day_ahead_prices_hourly_eval = day_ahead_prices_hourly.iloc[:, 0] + np.random.normal(0, 0.01, size=day_ahead_prices_hourly.shape[0])  # Slightly different profile for evaluation
+
+    day_ahead_market = DaaMarket(price_profile_per_simulation_time_step=day_ahead_prices_hourly.iloc[:, 0])
+    daa_price_forecaster = DataProfileForecaster(forecast_data=np.array(day_ahead_prices_hourly.iloc[:, 0]),
+                                         time_delta_seconds=3600)
+    
+    day_ahead_market_eval = DaaMarket(price_profile_per_simulation_time_step=day_ahead_prices_hourly_eval)
+    daa_price_forecaster_eval = DataProfileForecaster(forecast_data=np.array(day_ahead_prices_hourly_eval),
+                                         time_delta_seconds=3600)
     
     # Configure markets
     print("\n2. Configuring markets...")
@@ -669,6 +693,8 @@ def main():
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market,
         idc_price_forcaster=idc_price_forcaster,  # Placeholder, can be set to actual forecaster instance,
+        day_ahead_market=day_ahead_market,
+        daa_price_forecaster=daa_price_forecaster,
         max_steps=MAX_EPISODE_STEPS
     )
 
@@ -677,6 +703,8 @@ def main():
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market_eval,
         idc_price_forcaster=idc_price_forcaster_eval,  # Placeholder, can be set to actual forecaster instance,
+        day_ahead_market=day_ahead_market_eval,
+        daa_price_forecaster=daa_price_forecaster_eval,
         max_steps=MAX_EPISODE_STEPS
     )
 
@@ -767,8 +795,8 @@ def main():
     model = train_sac_agent(
         env=env,
         eval_env=eval_env,
-        total_timesteps=1_000_000,  # Increase for better results
-        save_path='./models/idc_only',
+        total_timesteps=1_500_000,  # Increase for better results
+        save_path='./models/idc_daa',
         model_name='sac_trading',
         eval_freq=30_000,
         checkpoint_freq=100_000,
@@ -787,7 +815,7 @@ def main():
     
     # Plot results
     print("\n7. Plotting results...")
-    plot_results(results, save_path='./models/idc_only/evaluation_results.png')
+    plot_results(results, save_path='./models/idc_daa/evaluation_results.png')
     
     print("\n" + "=" * 60)
     print("Training pipeline completed!")

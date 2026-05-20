@@ -78,6 +78,8 @@ class TradingCallback(BaseCallback):
         self._trade          = deque(maxlen=window)
         self._power_balance  = deque(maxlen=window)
         self._constraint     = deque(maxlen=window)  # 0/1 per step
+        self._daa_price      = deque(maxlen=window)
+        self._daa_trade      = deque(maxlen=window)
 
         # ── Episode accumulators (reset on each episode end) ─────────────
         self._ep_idc_revenue  = 0.0
@@ -87,6 +89,7 @@ class TradingCallback(BaseCallback):
         self._ep_soc_upper    = 0
         self._ep_soc_lower    = 0
         self._ep_length       = 0
+        self._total_revenue    = 0.0
 
     # ─────────────────────────────────────────────────────────────────────
     def _on_step(self) -> bool:
@@ -110,6 +113,8 @@ class TradingCallback(BaseCallback):
         trade    = float(info.get("trade",            0.0))
         balance  = float(info.get("fixed_power_balance", 0.0))
         c_fired  = int(info.get("constraint_fired",   0))
+        daa_price = float(info.get("daa_price", 0.0))
+        daa_trade = float(info.get("daa_trade", 0.0))
 
         # ── Rolling buffers ───────────────────────────────────────────────
         self._idc_reward.append(idc_r)
@@ -120,6 +125,8 @@ class TradingCallback(BaseCallback):
         self._trade.append(trade)
         self._power_balance.append(balance)
         self._constraint.append(c_fired)
+        self._daa_price.append(daa_price)
+        self._daa_trade.append(daa_trade)
 
         # ── Episode accumulators ──────────────────────────────────────────
         self._ep_idc_revenue += idc_r
@@ -129,6 +136,7 @@ class TradingCallback(BaseCallback):
         self._ep_soc_upper   += int(soc > 0.9)
         self._ep_soc_lower   += int(soc < 0.1)
         self._ep_length      += 1
+        self._total_revenue   += ((price * trade) + (daa_price * daa_trade))  # Cumulative net revenue across episode (for quick checks)
 
         # ── Flush episode metrics on episode end ──────────────────────────
         if info.get("episode") or info.get("terminal_observation") is not None:
@@ -212,11 +220,12 @@ class TradingCallback(BaseCallback):
         self.logger.record("episode/soc_upper_violations",    self._ep_soc_upper)
         self.logger.record("episode/soc_lower_violations",    self._ep_soc_lower)
         self.logger.record("episode/length",                  self._ep_length)
+        self.logger.record("episode/total_revenue",           self._total_revenue)
 
         if self.verbose > 0:
             print(
                 f"\n  ▸ Episode end  |  "
-                f"IDC revenue: €{self._ep_idc_revenue:>10.2f}  |  "
+                f"Total revenue: €{self._total_revenue:>10.2f}  |  "
                 f"Penalty: €{self._ep_penalty:>10.2f}  |  "
                 f"Net: €{self._ep_idc_revenue + self._ep_penalty:>10.2f}  |  "
                 f"Violations: {self._ep_violations}  |  "
@@ -232,6 +241,7 @@ class TradingCallback(BaseCallback):
         self._ep_soc_upper   = 0
         self._ep_soc_lower   = 0
         self._ep_length      = 0
+        self._total_revenue   = 0.0
 
     # ─────────────────────────────────────────────────────────────────────
     def _print_rolling(self, trade_arr, soc_arr, constraint_arr) -> None:

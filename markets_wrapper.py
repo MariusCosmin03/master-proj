@@ -12,6 +12,7 @@ from nrgise import Forecaster
 @dataclass
 class Forcasters:
     idc: Optional[Forecaster] = None
+    daa: Optional[Forecaster] = None
 
 class MarketsWrapper:
 
@@ -20,9 +21,10 @@ class MarketsWrapper:
             self, 
             battery_capacity_kwh: float,
             battery_max_power_kwh: float,
-            day_ahead_market: IdcMarket,
+            day_ahead_market: DaaMarket,
             intraday_market: IdcMarket,
             idc_price_forcaster,
+            daa_price_forecaster,
             max_steps: int = 96 * 30,  # 7 days with 15 min steps
     ):
         self.idc = intraday_market
@@ -35,7 +37,7 @@ class MarketsWrapper:
         self._pending_charge_volume = 0.0
 
         self.forecasters = Forcasters(idc=idc_price_forcaster,
-                                      # daa = daa_price_forecaster
+                                      daa = daa_price_forecaster
                                       )
         
 
@@ -43,7 +45,8 @@ class MarketsWrapper:
         self.price_max = self.idc.data_profile.max()
         self.price_min_daa = self.daa.data_profile.min()
         self.price_max_daa = self.daa.data_profile.max()
-
+        self._pending_daa_schedule = np.array([])  # Buffer to hold pending DAA schedule until it can be executed in IDC
+        self._current_daa_promise = np.zeros(24 * 4)  # To track the current promised schedule from DAA for state representation
         self.schedule_storage = pd.Series() # Store schedules for each market and time step
         self.schedule_pv = pd.Series()
 
@@ -60,30 +63,61 @@ class MarketsWrapper:
         # Placeholder for executing a step in the market based on the action taken by the agent
         # This would involve placing trades, updating market state, and calculating rewards
         
+        idc_action = action[:1]
+        daa_action = action[1:]
+        timestamp : pd.Timestamp = self.idc.data_profile.index[self.time_step]
 
+        ###### IDC ACTION EXECUTION ######
         length_of_action = self.idc.get_valid_trade_sequence_length_for_now()
-        idc_action = np.pad(action, (0, length_of_action - len(action)), mode="constant")
+        idc_action = np.pad(idc_action, (0, length_of_action - len(idc_action)), mode="constant")
         # print(f"Placing IDC trade sequence: {idc_action}, valid length: {length_of_action}, action shape: {idc_action.shape}")
         self.idc.place_trade_sequence(IdcTradeSequence(idc_action))
-        
-        
-        
+
+
+       
+
+        ##### DAA ACTION EXECUTION ######
+        self._pending_daa_schedule = np.append(self._pending_daa_schedule, daa_action)
+
+        if timestamp.hour == 12 and timestamp.minute == 0:  # Assuming DAA market clears at noon for the next day
+            if self._pending_daa_schedule.shape[0] < 24:
+                # Sanity check
+                if self.time_step > 100:
+                    print(f"Warning: DAA action length {self._pending_daa_schedule.shape[0]} is less than 24. Padding with zeros.")
+                # Pad with zeros if the action does not provide a full 24-hour schedule
+                self._pending_daa_schedule = np.pad(self._pending_daa_schedule, (24 - self._pending_daa_schedule.shape[0], 0), mode="constant")
+            daa_bids_hourly = self._pending_daa_schedule[:24]  # Take the first 24 values for the next day's schedule
+            self.daa.place_trade_sequence_for_next_day(DaaTradeSequence(daa_bids_hourly))
+            self._pending_daa_schedule = np.array([])
+            self._current_daa_promise = np.repeat(daa_bids_hourly, 4) / 4  # Update current DAA promise for state representation
+            
+
+
         self.idc.handle_time_step_update(self.time_step + 1)
+        self.daa.handle_time_step_update(self.time_step + 1)
 
         reward = self.reward(self.idc.time_step) # self.idc.get_revenue() / self.initial_balance
 
         self.time_step += 1
         
-
-        return self.get_state(), reward, False, {"idc_reward": reward}  # state, reward, done, info
+        market_info = {"idc_reward": reward} 
+        market_info["daa_price"] = self.daa.get_cleared_market_prices(timestamp.date())[timestamp.hour] if self.daa.get_cleared_market_prices(timestamp.date()) is not None else 0.0
+        market_info["daa_trade"] = self.daa.get_cleared_trade_sequence(timestamp.date())[timestamp.hour] if self.daa.get_cleared_trade_sequence(timestamp.date()) is not None else 0.0
+        return self.get_state(), reward, False, market_info # state, reward, done, info
 
     def reset(self):
         # Placeholder for resetting the market to an initial state at the beginning of an episode
         self.idc.reset()
+        self.daa.reset()
         self.time_step = 0
         self._pending_charge_cost = 0.0
         self._pending_charge_volume = 0.0
+
+        self._pending_daa_schedule = np.array([])  # Reset DAA schedule buffer
+        self._current_daa_promise = np.zeros(24 * 4)  # Reset current DAA promise
         state = self.get_state()
+
+        
         # return np.insert(state, 8, np.zeros(12)), {}  # initial state, info 
                                 # include 0 in place for the normalized position which will be filled in the first step
         return state, {}  # initial state, info
@@ -139,10 +173,16 @@ class MarketsWrapper:
 
 
         ################# DAA REWARD OPTION 1: BASED ON REALIZED PROFIT/LOSS #################
-        price_daa = self.daa.prices_log[timestamp]
-        trade_daa = self.daa.realized_trades_log[timestamp]
+        # daa_trades = self.daa.get_cleared_trade_sequence(timestamp.date())
+        # price_daa = daa_trades[timestamp.hour]
+        # trade_daa = self.daa.prices_per_hour_log[timestamp.date()][timestamp.hour]
+
+        price_daa = self.daa.get_cleared_market_prices(timestamp.date())[timestamp.hour] if self.daa.get_cleared_market_prices(timestamp.date()) is not None else 0.0
+        trade_daa = self.daa.get_cleared_trade_sequence(timestamp.date())[timestamp.hour] / 4 if self.daa.get_cleared_trade_sequence(timestamp.date()) is not None else 0.0
+
 
         curr_price_norm_daa = 2 * (price_daa - self.price_min_daa) / (self.price_max_daa - self.price_min_daa + 1e-8) - 1
+
         return curr_price_norm_idc * trade + curr_price_norm_daa * trade_daa
 
         if trade < 0:   # charging — defer cost, no immediate reward
@@ -171,15 +211,18 @@ class MarketsWrapper:
     
     def get_total_current_contribution(self):
         # Placeholder for calculating the total current contribution of the agent across all markets
+        idc_contribution = 0.0
         schedule = self.idc.get_cleared_schedule()
         if schedule is not None and not schedule.empty:
-            return schedule.iloc[0]
-        return 0.0
+            idc_contribution = schedule.iloc[0]
+        if self.daa is not None:
+            daa_schedule = self.daa.get_cleared_schedule()
+            if daa_schedule is not None and not daa_schedule.empty:
+                return idc_contribution + daa_schedule.iloc[0]
+        return idc_contribution
 
     def _get_idc_market_state(self):
-        curr_price = self.idc.get_price_of_current_time_step()
-        curr_price_norm = 2 * (curr_price - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
-
+        curr_price_norm = self.get_idc_price_normalized()
         state_info = [curr_price_norm]  # Normalize by a reasonable max price
 
         
@@ -200,20 +243,12 @@ class MarketsWrapper:
 
         state_info = np.append(state_info, price_change_3h)
 
-        # Market-specific features
-        # norm_position = self.idc.get_cleared_schedule().iloc[:12] * (4 / self.battery_max_power_kwh)
-        
-        
-        # norm_pending = self.idc.get_revenues_per_time_step() / self.initial_balance
-            
-        # state_info = np.append(state_info, norm_pending)
-        
         # Append normalized forecasts
         idc_forecast, idc_confidence = self.get_idc_forecast()
         # idc_forecast = np.insert(idc_forecast, 0, curr_price)  # Include current price for normalization
         # norm_forecast = np.diff(np.log(idc_forecast))
-        # norm_forecast = 2 * (idc_forecast - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
-        norm_forecast = idc_forecast
+        norm_forecast = 2 * (idc_forecast - self.price_min) / (self.price_max - self.price_min + 1e-8) - 1
+        # norm_forecast = idc_forecast
         state = np.concatenate([state_info, norm_forecast, ])# idc_confidence])
         
         return np.array(state, dtype=np.float32)
@@ -227,5 +262,14 @@ class MarketsWrapper:
         return self.idc.get_realized_trades()
     
     def _get_daa_market_state(self):
+
+
+        next_day_prices = self.daa._get_hourly_prices_for_tomorrow()
+        if next_day_prices is None or len(next_day_prices) == 0:
+            next_day_prices = np.zeros(24)  # Default to zeros if no data available
+        current_daa_promise = self._current_daa_promise[0]
+        self._current_daa_promise = self._current_daa_promise[1:]  # Shift the promise buffer
+
+
         # Placeholder for retrieving the state of the day-ahead market
-        return np.array([])
+        return np.array([current_daa_promise] + list(next_day_prices), dtype=np.float32)

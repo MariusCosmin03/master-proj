@@ -27,7 +27,8 @@ import pandas as pd
 from stable_baselines3 import SAC
 
 from environment import TradingEnvironment
-from train import MAX_EPISODE_STEPS, START_DATE, STORAGE_CAPACITY, STORAGE_POWER, TIME_DELTA_SECONDS, create_env, generate_prices
+from markets.daa_market import DaaMarket
+from train import MAX_EPISODE_STEPS, START_DATE, STORAGE_CAPACITY, STORAGE_POWER, TIME_DELTA_SECONDS, create_env, generate_prices, load_daa_data
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Core evaluation loop
@@ -112,6 +113,8 @@ def evaluate(
             "power_balance":   [],
             "price":           [],
             "trade":           [],
+            "daa_price":       [],
+            "daa_trade":       [],
         }
 
         while not done:
@@ -127,15 +130,22 @@ def evaluate(
             soc = float(info.get("soc", 0.0))
             power_balance = float(info.get("power_balance", 0.0))  # fallback to obs if not in info
 
-            ep["idc_revenue"].append(price * trade)  # Use price × trade for revenue to ensure consistency
+            daa_price = float(info.get("daa_price", 0.0))
+            daa_trade = float(info.get("daa_trade", 0.0))
+
+            ep["idc_revenue"].append(price * trade + (daa_trade * daa_price))  # Use price × trade for revenue to ensure consistency
             ep["energy_penalty"].append(float(info.get("energy_reward", 0.0)))
             ep["soc"].append(soc)           # soc is obs[0] per _build_observation
             ep["power_balance"].append(power_balance) # fixed_power_balance is obs[1]
             ep["price"].append(price)
             ep["trade"].append(trade)
-        
+            ep["daa_price"].append(daa_price)
+            ep["daa_trade"].append(daa_trade)
+
         ep["price"].append(np.partition(ep["price"], -5)[-5])  # Final step price
         ep["trade"].append((ep["soc"][-1] * STORAGE_CAPACITY * 4))  # No trade at final step
+        ep["daa_price"].append( 0.0)
+        ep["daa_trade"].append(0.0)
         ep["idc_revenue"].append(ep["price"][-1] * ep["trade"][-1])  # Final step revenue
         ep["soc"].append(0.0)  # Final step SoC
         ep["energy_penalty"].append(0.0)  # No penalty at final step
@@ -340,7 +350,7 @@ def _ax_style(ax, title: str, xlabel: str = "", ylabel: str = ""):
 
 
 def _plot(data: dict, metrics: dict, env) -> plt.Figure:
-    t = np.arange(len(data["price"]))
+    t = np.arange(len(data["price"]))  # Time steps (exclude final appended step)
 
     fig = plt.figure(figsize=(20, 18), facecolor=_C["bg"])
     fig.suptitle("TradingEnvironment — Evaluation Report",
@@ -355,7 +365,7 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
     ax_cumrev  = fig.add_subplot(gs[1, 0])
     ax_soc     = fig.add_subplot(gs[1, 1])
     ax_trade   = fig.add_subplot(gs[2, 0])
-    ax_balance = fig.add_subplot(gs[2, 1])
+    ax_daa_price = fig.add_subplot(gs[2, 1])
     ax_kpi     = fig.add_subplot(gs[3, 0])
     ax_daily   = fig.add_subplot(gs[3, 1])
 
@@ -418,18 +428,29 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
                     labelcolor=_C["text"], fontsize=8)
 
     # ── 5. Power balance ─────────────────────────────────────────────────
-    _ax_style(ax_balance, "Fixed Power Balance (Grid Imbalance)",
-              "Time Step", "Power (kW)")
-    ax_balance.plot(t, data["power_balance"], color=_C["balance"], lw=1, alpha=0.8)
-    ax_balance.axhline(0, color=_C["grid"], lw=0.8, ls=":")
-    ax_balance.fill_between(t, 0, data["power_balance"],
-                             where=data["power_balance"] > 0,
-                             color=_C["discharge"], alpha=0.15, label="Export")
-    ax_balance.fill_between(t, 0, data["power_balance"],
-                             where=data["power_balance"] < 0,
-                             color=_C["charge"], alpha=0.15, label="Import")
-    ax_balance.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
-                      labelcolor=_C["text"], fontsize=8)
+    # _ax_style(ax_balance, "Fixed Power Balance (Grid Imbalance)",
+    #           "Time Step", "Power (kW)")
+    # ax_balance.plot(t, data["daa_price"], color=_C["balance"], lw=1, alpha=0.8)
+    # # ax_balance.plot(t, data["daa_trade"], color=_C["discharge"], lw=1.5, alpha=0.8, label="DAA Trade (kW)")
+    # ax_balance.axhline(0, color=_C["grid"], lw=0.8, ls=":")
+    # ax_balance.fill_between(t, 0, data["power_balance"],
+    #                          where=data["power_balance"] > 0,
+    #                          color=_C["discharge"], alpha=0.15, label="Export")
+    # ax_balance.fill_between(t, 0, data["power_balance"],
+    #                          where=data["power_balance"] < 0,
+    #                          color=_C["charge"], alpha=0.15, label="Import")
+    # ax_balance.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
+    #                   labelcolor=_C["text"], fontsize=8)
+    
+    _ax_style(ax_daa_price, "DAA Price & Agent Trade Decisions",
+              "Time Step (15 min)", "Price (€/MWh)")
+    ax_daa_price.plot(t, data["daa_price"], color=_C["price"], lw=1, alpha=0.8, label="DAA Price")
+    cm = data["daa_trade"] < -1e-6
+    dm = data["daa_trade"] >  1e-6
+    ax_daa_price.scatter(t[cm], data["daa_price"][cm], s=5, color=_C["charge"],    alpha=0.7, label="Charge",    zorder=3)
+    ax_daa_price.scatter(t[dm], data["daa_price"][dm], s=5, color=_C["discharge"], alpha=0.7, label="Discharge", zorder=3)
+    ax_daa_price.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
+                    labelcolor=_C["text"], fontsize=8)
 
     # ── 6. KPI bar chart ──────────────────────────────────────────────────
     _ax_style(ax_kpi, "Key Performance Indicators")
@@ -576,6 +597,13 @@ if __name__ == "__main__":
     print("\n2. Configuring markets...")
     
     # Choose one of these configurations:
+
+    day_ahead_prices_hourly = load_daa_data(csv_path)
+    day_ahead_prices_hourly_eval = day_ahead_prices_hourly.iloc[:, 0] + np.random.normal(0, 0.01, size=day_ahead_prices_hourly.shape[0])  # Slightly different profile for evaluation
+
+    day_ahead_market = DaaMarket(price_profile_per_simulation_time_step=day_ahead_prices_hourly.iloc[:, 0])
+    daa_price_forecaster = DataProfileForecaster(forecast_data=np.array(day_ahead_prices_hourly.iloc[:, 0]),
+                                         time_delta_seconds=3600)
     
     idc_market = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile, index=timestamps))
     idc_price_forcaster = DataProfileForecaster(idc_price_profile, time_delta_seconds=900)
@@ -584,6 +612,8 @@ if __name__ == "__main__":
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market,
         idc_price_forcaster=idc_price_forcaster,  # Placeholder, can be set to actual forecaster instance,
+        day_ahead_market=day_ahead_market,
+        daa_price_forecaster=daa_price_forecaster,
         max_steps=MAX_EPISODE_STEPS
     )
 
@@ -618,7 +648,7 @@ if __name__ == "__main__":
     )
 
     # ── 4. Load the trained model ─────────────────────────────────────────
-    MODEL_PATH = "models/idc_only/best/best_model"             # no .zip extension needed
+    MODEL_PATH = "models/idc_daa/best/best_model"             # no .zip extension needed
     if not os.path.exists(MODEL_PATH + ".zip"):
         raise FileNotFoundError(f"No model found at {MODEL_PATH}.zip")
 
@@ -629,9 +659,9 @@ if __name__ == "__main__":
     results = evaluate(
         env=env,
         model=model,
-        n_episodes=1,           # increase to average over multiple runs
+        n_episodes=3,           # increase to average over multiple runs
         deterministic=True,     # always True for eval
         plot=True,
-        save_path="eval_report.png",
+        save_path="idc_daa_eval_report.png",
         verbose=True,
     )

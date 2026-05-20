@@ -65,16 +65,19 @@ class TradingEnvironment(gym.Env):
         )
 
         # ----- Observation Space -----
-        # Energy system state(2): soc(1) + fixed_power_balance(1)
+        # Energy system state(2): soc(1) # + fixed_power_balance(1)
         #  
     
 
         # Market state:
         # - Base features (5): time step(normalized), time of day(sin+cos), day of week(sin+cos)
-        # - IDC-specific features (16): current price(1), 1h momentum(1), 3h momentum(1), normalized position(12)
-        # - Forecasts(24): 12 future price forecasts + confidence levels (24)
-        # - Alternate Reward Function(2): Pending charge volume and cost (2)
-        obs_dim = 1 + (1+ 2 * 2) + (3 + 0) + (12 + 0) # + 2
+        # - IDC-specific features (3 + 0): current price(1), 1h momentum(1), 3h momentum(1), normalized position(12)
+        # - Forecasts(12 + 0): 12 future price forecasts (12) # + confidence levels (24)
+        # - Alternate Reward Function(0): # Pending charge volume and cost (2)
+        # - Forecasted prices for next day (24): Hourly prices for the next day from DAA (24)
+        # - Current DAA promise(1): The current promised schedule from DAA from the previous day (1)
+
+        obs_dim = 1 + (1+ 2 * 2) + (3 + 0) + (12 + 0) + (24) + (1)  # + 2
         self.observation_space = spaces.Box(
             low = -np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
         )
@@ -128,6 +131,7 @@ class TradingEnvironment(gym.Env):
         curr_price_norm_idc = self.markets.get_idc_price_normalized()
 
         market_reward = curr_price_norm_idc * actual_change  # Still reward based on what was actually executed
+        # market_reward = market_reward - execution_gap * np.abs(curr_price_norm_idc)  
         if execution_gap > 0.0001:  # Allow small execution errors
             # energy_reward = -10 # make smaller
             soc_violation = 1
