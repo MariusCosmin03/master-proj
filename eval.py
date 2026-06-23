@@ -108,6 +108,8 @@ def evaluate(
 
         ep: dict = {
             "idc_revenue":     [],
+            "daa_revenue":     [],
+            "total_revenue":   [],
             "energy_penalty":  [],
             "soc":             [],
             "power_balance":   [],
@@ -133,7 +135,9 @@ def evaluate(
             daa_price = float(info.get("daa_price", 0.0))
             daa_trade = float(info.get("daa_trade", 0.0))
 
-            ep["idc_revenue"].append(price * trade + (daa_trade * daa_price))  # Use price × trade for revenue to ensure consistency
+            ep["idc_revenue"].append(price * trade)
+            ep["daa_revenue"].append(daa_trade * daa_price)  # Use price × trade for revenue to ensure consistency
+            ep["total_revenue"].append(ep["idc_revenue"][-1] + ep["daa_revenue"][-1])
             ep["energy_penalty"].append(float(info.get("energy_reward", 0.0)))
             ep["soc"].append(soc)           # soc is obs[0] per _build_observation
             ep["power_balance"].append(power_balance) # fixed_power_balance is obs[1]
@@ -147,6 +151,8 @@ def evaluate(
         ep["daa_price"].append( 0.0)
         ep["daa_trade"].append(0.0)
         ep["idc_revenue"].append(ep["price"][-1] * ep["trade"][-1])  # Final step revenue
+        ep["daa_revenue"].append(0.0)  # No DAA revenue at final step
+        ep["total_revenue"].append(ep["idc_revenue"][-1])  # Total revenue at final step
         ep["soc"].append(0.0)  # Final step SoC
         ep["energy_penalty"].append(0.0)  # No penalty at final step
         ep["power_balance"].append(0.0)  # No imbalance at final step
@@ -385,9 +391,13 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
               "Time Step", "Cumulative (€)")
     cum_rev = np.cumsum(data["idc_revenue"])
     cum_pen = np.cumsum(data["energy_penalty"])
+    cum_daa = np.cumsum(data["daa_revenue"])
+    cum_total = cum_rev + cum_daa
     cum_net = cum_rev + cum_pen
     ax_cumrev.plot(t, cum_rev, color=_C["revenue"],  lw=1.8, label="IDC Revenue")
     ax_cumrev.plot(t, cum_pen, color=_C["penalty"],  lw=1.2, ls="--", label="Constraint Penalties")
+    ax_cumrev.plot(t, cum_daa, color=_C["discharge"],  lw=1.5, ls="-.", label="DAA Revenue")
+    # ax_cumrev.plot(t, cum_total, color=_C["accent"],   lw=2.2, label="Total Revenue")
     ax_cumrev.plot(t, cum_net, color=_C["accent"],   lw=2.2, label="Net Profit")
     ax_cumrev.axhline(0, color=_C["grid"], lw=0.8, ls=":")
     ax_cumrev.axhline(1257.9, color="r", lw=0.8, ls="--", label="Baseline MPC(1257.9€)")

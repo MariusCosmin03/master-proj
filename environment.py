@@ -32,6 +32,8 @@ class TradingEnvironment(gym.Env):
         # forecaster: pd.Series,
         energy_system: EnergySystem,
         markets: MarketsWrapper,
+        idc_price_data: list[pd.Series],
+        daa_price_data: list[pd.Series],
         forecast_horizon_hours: int = 3,
         time_delta_seconds: int = 900,
         battery_power_kwh: float = 10.0,
@@ -55,6 +57,9 @@ class TradingEnvironment(gym.Env):
 
         self.start_date = start_date
 
+        self.idc_prices = idc_price_data
+        self.daa_prices = daa_price_data
+
         # Define action and observation space
         # ----- Action Space -----
         # [idc_volume_kw] over the next 3 hours (12 time steps of 15 min each)
@@ -65,8 +70,7 @@ class TradingEnvironment(gym.Env):
         )
 
         # ----- Observation Space -----
-        # Energy system state(2): soc(1) # + fixed_power_balance(1)
-        #  
+        # Energy system state(2): soc(1) 
     
 
         # Market state:
@@ -87,6 +91,8 @@ class TradingEnvironment(gym.Env):
         super().reset(seed=seed)
         self.current_step = 0
 
+        self.reset_prices_discrete()
+
         energy_state = self.energy_system.reset()
         market_state, market_info = self.markets.reset()
         
@@ -102,7 +108,7 @@ class TradingEnvironment(gym.Env):
         obs = self._build_observation(energy_state, market_state)
         # obs = np.zeros(self.observation_space.shape, dtype=np.float64)  # Placeholder for initial observation
         info = {"energy_state": energy_state, "market_state": market_state}
-    
+
         return obs, market_info
 
     def step(self, action:np.ndarray):
@@ -122,7 +128,7 @@ class TradingEnvironment(gym.Env):
 
         actual_change = power_contribution_per_component["battery"]
         execution_gap = abs(actual_change - physical_change)        # kWh
-        max_power = self.battery_power_kwh
+        # max_power = self.battery_power_kwh
 
         # Penalty scales with how badly the battery failed to execute
         # Max penalty ≈ 2× avg step revenue, not 240×
@@ -138,7 +144,8 @@ class TradingEnvironment(gym.Env):
         else:
             energy_reward = 0.0
 
-        soc = energy_state["components_states"]["battery"]["soc"]
+        if energy_state is not None:
+            soc = energy_state["components_states"]["battery"]["soc"]
 
         # Soft quadratic SoC penalty — activates near limits, zero in safe zone
         # soc_penalty = 0.0
@@ -155,7 +162,11 @@ class TradingEnvironment(gym.Env):
         # energy_reward += soc_penalty # + alignment_bonus
 
         # 4. Combine state and reward
-        combined_state = self._build_observation(energy_state, market_state)
+            combined_state = self._build_observation(energy_state, market_state)
+        else:
+            print("Warning: Energy state is None. Using market state only for observation and zero reward. Time step:", self.current_step, "Energy done was:", energy_system_done)
+            soc = 0  # Default SoC if energy state is unavailable
+            combined_state = np.concatenate([np.array([soc]), market_state])  # Placeholder if energy state is unavailable
 
         # print(combined_state)
         reward = float(energy_reward + market_reward)
@@ -163,7 +174,6 @@ class TradingEnvironment(gym.Env):
         market_info["idc_reward"] = market_reward
 
         market_info["soc"]              = soc
-        market_info["fixed_power_balance"] = energy_state["fixed_power_balance"]
         market_info["price"]            = price
         market_info["trade"]            = actual_change
         market_info["constraint_fired"] = int(soc_violation)
@@ -177,6 +187,12 @@ class TradingEnvironment(gym.Env):
             # print(f"Episode done at step {self.current_step}. Market done: {market_done}, Energy system done: {energy_system_done}")
             reward = reward + soc * self.battery_capacity_kwh * price   # Final reward bonus for remaining SoC and power balance at episode end
         market_info["final_reward"] = reward
+
+        if np.any(np.isnan(combined_state)):
+            print(f"WARNING: NaN in observation: {combined_state}")
+        if np.isnan(reward):
+            print(f"WARNING: NaN reward at step")
+
         return combined_state, reward, done, False, market_info # state, reward, done, truncated, info
     
     def _translate_to_physical_change(self):
@@ -279,3 +295,26 @@ class TradingEnvironment(gym.Env):
     def get_time_delta_seconds(self):
         # Placeholder for retrieving the time delta in seconds
         return self.energy_system.time_delta_seconds()
+    
+    def reset_prices(self): #, new_starting_date: pd.Timestamp):
+        """
+        Reset the market prices to new values based on a random starting date.
+        """
+        new_starting_date = np.random.randint(0, len(self.idc_prices) - self.max_episode_steps)
+        new_idc_prices = self.idc_prices[new_starting_date:new_starting_date + self.max_episode_steps]
+        new_daa_prices = self.daa_prices[new_starting_date:new_starting_date + self.max_episode_steps//4]  # Assuming DAA prices are hourly
+        self.markets.reset_prices(new_idc_prices, new_daa_prices)
+        self.energy_system.time_index = new_idc_prices.index  # Update the energy system's time index to match the new prices
+
+    def reset_prices_discrete(self):
+        """
+        Reset the market prices to new values based on a random starting date, ensuring that the starting date aligns with discrete time steps.
+        """
+        idx = np.random.randint(0, len(self.idc_prices))
+
+        new_idc_prices = self.idc_prices[idx]
+        new_daa_prices = self.daa_prices[idx]
+        self.markets.reset_prices(new_idc_prices, new_daa_prices)
+        self.energy_system._time_index = new_idc_prices.index  # Update the energy system's time index to match the new prices
+
+

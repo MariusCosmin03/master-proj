@@ -7,6 +7,7 @@ import pandas as pd
 from markets.idc_market import IdcMarket, IdcTradeSequence
 from markets.daa_market import DaaMarket, DaaTradeSequence
 from nrgise import Forecaster
+from nrgise.forecaster import DataProfileForecaster
 
 
 @dataclass
@@ -25,12 +26,13 @@ class MarketsWrapper:
             intraday_market: IdcMarket,
             idc_price_forcaster,
             daa_price_forecaster,
-            max_steps: int = 96 * 30,  # 7 days with 15 min steps
+            max_steps: int = 4 * 24 * 7,  # 7 days with 15 min steps
     ):
         self.idc = intraday_market
         # self.initial_balance = initial_balance
         self.battery_capacity_kwh = battery_capacity_kwh
         self.battery_max_power_kwh = battery_max_power_kwh
+        
         self.daa = day_ahead_market
 
         self._pending_charge_cost = 0.0
@@ -51,6 +53,7 @@ class MarketsWrapper:
         self.schedule_pv = pd.Series()
 
         self.time_step = 0
+        self.daa_time_step = 0
         self.max_steps = max_steps
     
     
@@ -94,7 +97,9 @@ class MarketsWrapper:
 
 
         self.idc.handle_time_step_update(self.time_step + 1)
-        self.daa.handle_time_step_update(self.time_step + 1)
+        if self.time_step % 4 == 0 and self.daa_time_step * 4 < self.max_steps:  # Every hour, update DAA market state
+            self.daa.handle_time_step_update(self.daa_time_step)
+            self.daa_time_step += 1
 
         reward = self.reward(self.idc.time_step) # self.idc.get_revenue() / self.initial_balance
 
@@ -110,6 +115,7 @@ class MarketsWrapper:
         self.idc.reset()
         self.daa.reset()
         self.time_step = 0
+        self.daa_time_step = 0
         self._pending_charge_cost = 0.0
         self._pending_charge_volume = 0.0
 
@@ -228,7 +234,7 @@ class MarketsWrapper:
         
         # Price momentum (last 4 intervals) - 1 hour
         if self.idc.time_step >= 4:
-            recent_prices = self.idc.data_profile[self.idc.time_step - 4:self.idc.time_step]
+            recent_prices = self.idc.data_profile.iloc[self.idc.time_step - 4:self.idc.time_step]
             price_change_1h = (self.idc.get_price_of_current_time_step() - recent_prices.iloc[0]) / (recent_prices.iloc[0] +1e-8)
         else: 
             price_change_1h = 0.0
@@ -236,7 +242,7 @@ class MarketsWrapper:
 
         # Price momentum (last 12 intervals) - 3 hours
         if self.idc.time_step >= 12:
-            recent_prices = self.idc.data_profile[self.idc.time_step - 12:self.idc.time_step]
+            recent_prices = self.idc.data_profile.iloc[self.idc.time_step - 12:self.idc.time_step]
             price_change_3h = (self.idc.get_price_of_current_time_step() - recent_prices.iloc[0]) / (recent_prices.iloc[0] +1e-8)
         else: 
             price_change_3h = 0.0
@@ -265,7 +271,7 @@ class MarketsWrapper:
 
 
         next_day_prices = self.daa._get_hourly_prices_for_tomorrow()
-        if next_day_prices is None or len(next_day_prices) == 0:
+        if next_day_prices is None or len(next_day_prices) == 0 or np.isnan(next_day_prices).any():
             next_day_prices = np.zeros(24)  # Default to zeros if no data available
         current_daa_promise = self._current_daa_promise[0]
         self._current_daa_promise = self._current_daa_promise[1:]  # Shift the promise buffer
@@ -273,3 +279,39 @@ class MarketsWrapper:
 
         # Placeholder for retrieving the state of the day-ahead market
         return np.array([current_daa_promise] + list(next_day_prices), dtype=np.float32)
+
+    def reset_prices(self, new_idc_prices, new_daa_prices):
+        """
+        Reset the market prices to new values based on the provided starting date.
+
+        Args:
+            new_idc_prices (list): The new IDC prices.
+            new_daa_prices (list): The new DAA prices.
+        """
+
+        self.idc._price_profile_per_simulation_time_step = new_idc_prices
+        self.daa._price_profile_per_simulation_time_step = new_daa_prices
+        # self.idc_market = IdcMarket(price_profile_per_simulation_time_step=new_idc_prices)
+        # self.idc_price_forcaster = DataProfileForecaster(new_idc_prices, time_delta_seconds=900)
+
+
+        # self.daa_market = DaaMarket(price_profile_per_simulation_time_step=new_daa_prices)
+        # self.daa_price_forcaster = DataProfileForecaster(forecast_data=new_daa_prices,
+        #                                                  time_delta_seconds=3600)
+        
+        # self.forecasters = Forcasters(idc=self.idc_price_forcaster,
+        #                               daa = self.daa_price_forcaster
+        #                               )
+        self.forecasters.idc._forecast_data = np.array(new_idc_prices)
+        self.forecasters.daa._forecast_data = np.array(new_daa_prices)
+
+        # Recalculate normalization bounds for the new week — critical for
+        # reward() and _get_idc_market_state() to normalize correctly
+        self.price_min = self.idc.data_profile.min()
+        self.price_max = self.idc.data_profile.max()
+        self.price_min_daa = self.daa.data_profile.min()
+        self.price_max_daa = self.daa.data_profile.max()
+
+        self.time_step = 0
+
+

@@ -1,0 +1,320 @@
+{
+  "train": [
+    {
+      "file": "data_splits\\idc\\train\\week_000.csv",
+      "start": "2024-03-04 00:00:00",
+      "end": "2024-03-10 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_001.csv",
+      "start": "2024-06-10 00:00:00",
+      "end": "2024-06-16 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_002.csv",
+      "start": "2024-06-24 00:00:00",
+      "end": "2024-06-30 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_003.csv",
+      "start": "2024-01-22 00:00:00",
+      "end": "2024-01-28 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_004.csv",
+      "start": "2024-05-27 00:00:00",
+      "end": "2024-06-02 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_005.csv",
+      "start": "2024-09-23 00:00:00",
+      "end": "2024-09-29 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_006.csv",
+      "start": "2024-04-22 00:00:00",
+      "end": "2024-04-28 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_007.csv",
+      "start": "2024-09-30 00:00:00",
+      "end": "2024-10-06 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_008.csv",
+      "start": "2024-05-13 00:00:00",
+      "end": "2024-05-19 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_009.csv",
+      "start": "2024-03-18 00:00:00",
+      "end": "2024-03-24 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_010.csv",
+      "start": "2024-12-09 00:00:00",
+      "end": "2024-12-15 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_011.csv",
+      "start": "2024-06-17 00:00:00",
+      "end": "2024-06-23 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_012.csv",
+      "start": "2024-08-19 00:00:00",
+      "end": "2024-08-25 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_013.csv",
+      "start": "2024-07-22 00:00:00",
+      "end": "2024-07-28 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_014.csv",
+      "start": "2024-08-05 00:00:00",
+      "end": "2024-08-11 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_015.csv",
+      "start": "2024-11-04 00:00:00",
+      "end": "2024-11-10 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_016.csv",
+      "start": "2024-01-29 00:00:00",
+      "end": "2024-02-04 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_017.csv",
+      "start": "2024-07-15 00:00:00",
+      "end": "2024-07-21 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_018.csv",
+      "start": "2024-03-11 00:00:00",
+      "end": "2024-03-17 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_019.csv",
+      "start": "2024-07-01 00:00:00",
+      "end": "2024-07-07 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_020.csv",
+      "start": "2024-09-09 00:00:00",
+      "end": "2024-09-15 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_021.csv",
+      "start": "2024-01-01 00:00:00",
+      "end": "2024-01-07 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_022.csv",
+      "start": "2024-11-11 00:00:00",
+      "end": "2024-11-17 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_023.csv",
+      "start": "2024-05-06 00:00:00",
+      "end": "2024-05-12 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_024.csv",
+      "start": "2024-10-21 00:00:00",
+      "end": "2024-10-27 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_025.csv",
+      "start": "2024-12-23 00:00:00",
+      "end": "2024-12-29 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_026.csv",
+      "start": "2024-09-02 00:00:00",
+      "end": "2024-09-08 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_027.csv",
+      "start": "2024-12-02 00:00:00",
+      "end": "2024-12-08 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_028.csv",
+      "start": "2024-07-29 00:00:00",
+      "end": "2024-08-04 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_029.csv",
+      "start": "2024-05-20 00:00:00",
+      "end": "2024-05-26 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_030.csv",
+      "start": "2024-06-03 00:00:00",
+      "end": "2024-06-09 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_031.csv",
+      "start": "2024-03-25 00:00:00",
+      "end": "2024-03-31 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_032.csv",
+      "start": "2024-10-14 00:00:00",
+      "end": "2024-10-20 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_033.csv",
+      "start": "2024-08-12 00:00:00",
+      "end": "2024-08-18 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_034.csv",
+      "start": "2024-11-18 00:00:00",
+      "end": "2024-11-24 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\train\\week_035.csv",
+      "start": "2024-04-01 00:00:00",
+      "end": "2024-04-07 23:45:00",
+      "steps": 672
+    }
+  ],
+  "val": [
+    {
+      "file": "data_splits\\idc\\val\\week_000.csv",
+      "start": "2024-12-16 00:00:00",
+      "end": "2024-12-22 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_001.csv",
+      "start": "2024-01-15 00:00:00",
+      "end": "2024-01-21 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_002.csv",
+      "start": "2024-07-08 00:00:00",
+      "end": "2024-07-14 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_003.csv",
+      "start": "2024-09-16 00:00:00",
+      "end": "2024-09-22 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_004.csv",
+      "start": "2024-02-05 00:00:00",
+      "end": "2024-02-11 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_005.csv",
+      "start": "2024-08-26 00:00:00",
+      "end": "2024-09-01 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\val\\week_006.csv",
+      "start": "2024-10-28 00:00:00",
+      "end": "2024-11-03 23:45:00",
+      "steps": 672
+    }
+  ],
+  "test": [
+    {
+      "file": "data_splits\\idc\\test\\week_000.csv",
+      "start": "2024-02-12 00:00:00",
+      "end": "2024-02-18 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_001.csv",
+      "start": "2024-02-26 00:00:00",
+      "end": "2024-03-03 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_002.csv",
+      "start": "2024-04-08 00:00:00",
+      "end": "2024-04-14 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_003.csv",
+      "start": "2024-04-15 00:00:00",
+      "end": "2024-04-21 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_004.csv",
+      "start": "2024-04-29 00:00:00",
+      "end": "2024-05-05 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_005.csv",
+      "start": "2024-11-25 00:00:00",
+      "end": "2024-12-01 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_006.csv",
+      "start": "2024-01-08 00:00:00",
+      "end": "2024-01-14 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_007.csv",
+      "start": "2024-02-19 00:00:00",
+      "end": "2024-02-25 23:45:00",
+      "steps": 672
+    },
+    {
+      "file": "data_splits\\idc\\test\\week_008.csv",
+      "start": "2024-10-07 00:00:00",
+      "end": "2024-10-13 23:45:00",
+      "steps": 672
+    }
+  ]
+}
