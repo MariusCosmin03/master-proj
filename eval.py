@@ -96,15 +96,16 @@ def evaluate(
     Suggested additions (not yet implemented — see NOTES at bottom)
       daily_revenue_std        Day-to-day revenue consistency
       forecast_mae             Forecast error vs realised prices  (needs forecaster access)
-      degradation_cost_eur     Throughput × cost/MWh              (needs battery spec)
+      degradation_cost_eur     Throughput x cost/MWh              (needs battery spec)
       net_profit_after_degradation
     """
 
     all_episodes: list[dict] = []
-
-    for ep in range(n_episodes):
+    for ep_num in range(n_episodes):
         obs, _ = env.reset()
         done = False
+
+
 
         ep: dict = {
             "idc_revenue":     [],
@@ -113,11 +114,13 @@ def evaluate(
             "energy_penalty":  [],
             "soc":             [],
             "power_balance":   [],
-            "price":           [],
-            "trade":           [],
+            "idc_price":       [],
+            "idc_trade":       [],
             "daa_price":       [],
             "daa_trade":       [],
         }
+
+        print(env.markets.idc._price_profile_per_simulation_time_step.index[0])
 
         while not done:
             action, _ = model.predict(obs, deterministic=deterministic)
@@ -127,8 +130,8 @@ def evaluate(
             # ── Pull raw values directly from market logs ──────────────────
             idc   = env.markets.idc
             ts    = idc.time_stamp
-            price = float(info.get("price", 0.0))
-            trade = float(info.get("trade", 0.0))
+            price = float(info.get("idc_price", 0.0))
+            trade = float(info.get("idc_trade", 0.0))
             soc = float(info.get("soc", 0.0))
             power_balance = float(info.get("power_balance", 0.0))  # fallback to obs if not in info
 
@@ -141,27 +144,28 @@ def evaluate(
             ep["energy_penalty"].append(float(info.get("energy_reward", 0.0)))
             ep["soc"].append(soc)           # soc is obs[0] per _build_observation
             ep["power_balance"].append(power_balance) # fixed_power_balance is obs[1]
-            ep["price"].append(price)
-            ep["trade"].append(trade)
+            ep["idc_price"].append(price)
+            ep["idc_trade"].append(trade)
             ep["daa_price"].append(daa_price)
             ep["daa_trade"].append(daa_trade)
 
-        ep["price"].append(np.partition(ep["price"], -5)[-5])  # Final step price
-        ep["trade"].append((ep["soc"][-1] * STORAGE_CAPACITY * 4))  # No trade at final step
-        ep["daa_price"].append( 0.0)
-        ep["daa_trade"].append(0.0)
-        ep["idc_revenue"].append(ep["price"][-1] * ep["trade"][-1])  # Final step revenue
-        ep["daa_revenue"].append(0.0)  # No DAA revenue at final step
-        ep["total_revenue"].append(ep["idc_revenue"][-1])  # Total revenue at final step
-        ep["soc"].append(0.0)  # Final step SoC
-        ep["energy_penalty"].append(0.0)  # No penalty at final step
-        ep["power_balance"].append(0.0)  # No imbalance at final step
+        # ep["idc_price"].append(np.partition(ep["idc_price"], -5)[-5])  # Final step price
+        # ep["idc_trade"].append((ep["soc"][-1] * STORAGE_CAPACITY * 4))  # No trade at final step
+        # ep["daa_price"].append( 0.0)
+        # ep["daa_trade"].append(0.0)
+        # ep["idc_revenue"].append(ep["idc_price"][-1] * ep["idc_trade"][-1])  # Final step revenue
+        # ep["daa_revenue"].append(0.0)  # No DAA revenue at final step
+        # ep["total_revenue"].append(ep["idc_revenue"][-1])  # Total revenue at final step
+        # ep["soc"].append(0.0)  # Final step SoC
+        # ep["energy_penalty"].append(0.0)  # No penalty at final step
+        # ep["power_balance"].append(0.0)  # No imbalance at final step
         all_episodes.append({k: np.array(v) for k, v in ep.items()})
 
     # ── Average trajectories across episodes ──────────────────────────────
     def _avg(key): return np.mean([e[key] for e in all_episodes], axis=0)
-
-    data = {k: _avg(k) for k in all_episodes[0]}
+    data = all_episodes[2].copy()  # Use the last episode as a template for keys
+    
+    # data = {k: _avg(k) for k in all_episodes[0]}
 
     # ── Compute metrics ───────────────────────────────────────────────────
     metrics = _compute_metrics(data, env)
@@ -187,23 +191,23 @@ def evaluate(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_metrics(data: dict, env) -> dict:
-    rev      = data["idc_revenue"]
+    rev      = data["total_revenue"]
     penalty  = data["energy_penalty"]
     soc      = data["soc"]
-    price    = data["price"]
-    trade    = data["trade"]
+    idc_price    = data["idc_price"]
+    idc_trade    = data["idc_trade"]
 
     cap_kwh  = getattr(env, "battery_capacity_kwh", 1000.0)
-    mwh_step = np.abs(trade)                            # MWh per step
+    mwh_step = np.abs(idc_trade)                            # MWh per step
     throughput = float(mwh_step.sum())
 
-    charge_mask    = trade < -1e-6
-    discharge_mask = trade >  1e-6
+    charge_mask    = idc_trade < -1e-6
+    discharge_mask = idc_trade >  1e-6
 
-    avg_chg = float(price[charge_mask].mean())    if charge_mask.any()    else 0.0
-    avg_dis = float(price[discharge_mask].mean()) if discharge_mask.any() else 0.0
+    avg_chg = float(idc_price[charge_mask].mean())    if charge_mask.any()    else 0.0
+    avg_dis = float(idc_price[discharge_mask].mean()) if discharge_mask.any() else 0.0
     spread  = avg_dis - avg_chg
-    max_spread = float(price.max() - price.min())
+    max_spread = float(idc_price.max() - idc_price.min())
 
     # Risk metrics (annualised to yearly, assuming 15-min steps)
     steps_per_year = 96 * 365
@@ -220,8 +224,8 @@ def _compute_metrics(data: dict, env) -> dict:
     max_dd      = float((running_max - cumrev).max())
 
     # Price timing: positive when agent discharges at high prices, charges at low
-    price_rank = pd.Series(price).rank(pct=True).values
-    signed_rank = price_rank * np.sign(trade + 1e-12)
+    idc_price_rank = pd.Series(idc_price).rank(pct=True).values
+    signed_rank = idc_price_rank * np.sign(idc_trade + 1e-12)
     timing = float(np.corrcoef(mwh_step, signed_rank)[0, 1]) if mwh_step.std() > 0 else 0.0
 
     idle_thresh = 0.01  # MWh — below this is considered idle
@@ -356,7 +360,7 @@ def _ax_style(ax, title: str, xlabel: str = "", ylabel: str = ""):
 
 
 def _plot(data: dict, metrics: dict, env) -> plt.Figure:
-    t = np.arange(len(data["price"]))  # Time steps (exclude final appended step)
+    t = np.arange(len(data["idc_price"]))  # Time steps (exclude final appended step)
 
     fig = plt.figure(figsize=(20, 18), facecolor=_C["bg"])
     fig.suptitle("TradingEnvironment — Evaluation Report",
@@ -378,11 +382,11 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
     # ── 1. Price + trade markers ──────────────────────────────────────────
     _ax_style(ax_price, "IDC Price & Agent Trade Decisions",
               "Time Step (15 min)", "Price (€/MWh)")
-    ax_price.plot(t, data["price"], color=_C["price"], lw=1, alpha=0.8, label="IDC Price")
-    cm = data["trade"] < -1e-6
-    dm = data["trade"] >  1e-6
-    ax_price.scatter(t[cm], data["price"][cm], s=5, color=_C["charge"],    alpha=0.7, label="Charge",    zorder=3)
-    ax_price.scatter(t[dm], data["price"][dm], s=5, color=_C["discharge"], alpha=0.7, label="Discharge", zorder=3)
+    ax_price.plot(t, data["idc_price"], color=_C["price"], lw=1, alpha=0.8, label="IDC Price")
+    cm = data["idc_trade"] < -1e-6
+    dm = data["idc_trade"] >  1e-6
+    ax_price.scatter(t[cm], data["idc_price"][cm], s=5, color=_C["charge"],    alpha=0.7, label="Charge",    zorder=3)
+    ax_price.scatter(t[dm], data["idc_price"][dm], s=5, color=_C["discharge"], alpha=0.7, label="Discharge", zorder=3)
     ax_price.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
                     labelcolor=_C["text"], fontsize=8)
 
@@ -393,14 +397,16 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
     cum_pen = np.cumsum(data["energy_penalty"])
     cum_daa = np.cumsum(data["daa_revenue"])
     cum_total = cum_rev + cum_daa
-    cum_net = cum_rev + cum_pen
+    cum_net = cum_total + cum_pen
     ax_cumrev.plot(t, cum_rev, color=_C["revenue"],  lw=1.8, label="IDC Revenue")
     ax_cumrev.plot(t, cum_pen, color=_C["penalty"],  lw=1.2, ls="--", label="Constraint Penalties")
     ax_cumrev.plot(t, cum_daa, color=_C["discharge"],  lw=1.5, ls="-.", label="DAA Revenue")
     # ax_cumrev.plot(t, cum_total, color=_C["accent"],   lw=2.2, label="Total Revenue")
     ax_cumrev.plot(t, cum_net, color=_C["accent"],   lw=2.2, label="Net Profit")
     ax_cumrev.axhline(0, color=_C["grid"], lw=0.8, ls=":")
-    ax_cumrev.axhline(1257.9, color="r", lw=0.8, ls="--", label="Baseline MPC(1257.9€)")
+    # ax_cumrev.axhline(1257.9, color="r", lw=0.8, ls="--", label="Baseline MPC(1257.9€)")
+    ax_cumrev.axhline(1149.16, color="r", lw=0.8, ls="--", label="Baseline MPC IDC ONLY (1149.16€)")
+    ax_cumrev.axhline(685.94+411.05, color="r", lw=0.8, ls="--", label="Baseline MPC IDC+DAA (1097€)")
 
     ax_cumrev.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
                      labelcolor=_C["text"], fontsize=8)
@@ -429,9 +435,9 @@ def _plot(data: dict, metrics: dict, env) -> plt.Figure:
     # ── 4. Trade volume per step ──────────────────────────────────────────
     _ax_style(ax_trade, "Trade Volume per Step",
               "Time Step", "Volume (MWh)")
-    ax_trade.bar(t[data["trade"] < 0], data["trade"][data["trade"] < 0],
+    ax_trade.bar(t[data["idc_trade"] < 0], data["idc_trade"][data["idc_trade"] < 0],
                  color=_C["charge"], alpha=0.7, width=1, label="Charge")
-    ax_trade.bar(t[data["trade"] > 0], data["trade"][data["trade"] > 0],
+    ax_trade.bar(t[data["idc_trade"] > 0], data["idc_trade"][data["idc_trade"] > 0],
                  color=_C["discharge"], alpha=0.7, width=1, label="Discharge")
     ax_trade.axhline(0, color=_C["grid"], lw=0.6)
     ax_trade.legend(facecolor=_C["panel"], edgecolor=_C["grid"],
@@ -588,31 +594,50 @@ if __name__ == "__main__":
     # ── 2. Build the market and energy system ─────────────────────────────
     print("\n1. Generating price profiles...")
     # price_profiles = create_sample_price_profiles(days=30, time_delta_seconds=900)
-    timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
+    # timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
     
-    idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+    # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
 
-    SIM_LENGTH = 4*24 * 7 # one week operation
+    # SIM_LENGTH = 4*24 * 7 # one week operation
 
-    csv_path = "preprocessed_idc_prices_2024.csv"
-    # with as_file(res) as csv_path:
-    idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
-    idc_prices['prices'] = idc_prices['prices'] / 1000
-    idc_prices = idc_prices.iloc[:, 0] # type: ignore
+    # csv_path = "preprocessed_idc_prices_2024.csv"
+    # # with as_file(res) as csv_path:
+    # idc_prices = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+    # idc_prices['prices'] = idc_prices['prices'] / 1000
+    # idc_prices = idc_prices.iloc[:, 0] # type: ignore
 
-    idc_prices = idc_prices[0:SIM_LENGTH]
-    idc_price_profile = idc_prices.values
+    # idc_prices = idc_prices[0:SIM_LENGTH]
+    # idc_price_profile = idc_prices.values
+
+    from scripts.data_split import load_split
+
+    idc_test_weeks: list[pd.Series]  = load_split('data_splits/idc/manifest.json', 'test')
+    for i in range(len(idc_test_weeks)):
+        idc_test_weeks[i] /= 1000
+    idc_price_profile = idc_test_weeks[2]
+    timestamps = idc_price_profile.index
+    
+    # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
+    # idc_price_profile_eval = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS, seed=999)
+    
+
+    daa_test_weeks: list[pd.Series]  = load_split("data_splits/daa/manifest.json", "test")
+    for i in range(len(daa_test_weeks)):
+        daa_test_weeks[i] /= 1000
+    day_ahead_prices_hourly = daa_test_weeks[2] 
+    timestamps_daa = day_ahead_prices_hourly.index
+
 
     # Configure markets
     print("\n2. Configuring markets...")
     
     # Choose one of these configurations:
 
-    day_ahead_prices_hourly = load_daa_data(csv_path)
-    day_ahead_prices_hourly_eval = day_ahead_prices_hourly.iloc[:, 0] + np.random.normal(0, 0.01, size=day_ahead_prices_hourly.shape[0])  # Slightly different profile for evaluation
+    # day_ahead_prices_hourly = load_daa_data(csv_path)
+    # day_ahead_prices_hourly_eval = day_ahead_prices_hourly.iloc[:, 0] + np.random.normal(0, 0.01, size=day_ahead_prices_hourly.shape[0])  # Slightly different profile for evaluation
 
-    day_ahead_market = DaaMarket(price_profile_per_simulation_time_step=day_ahead_prices_hourly.iloc[:, 0])
-    daa_price_forecaster = DataProfileForecaster(forecast_data=np.array(day_ahead_prices_hourly.iloc[:, 0]),
+    day_ahead_market = DaaMarket(price_profile_per_simulation_time_step=pd.Series(day_ahead_prices_hourly, index=timestamps_daa))
+    daa_price_forecaster = DataProfileForecaster(forecast_data=day_ahead_prices_hourly,
                                          time_delta_seconds=3600)
     
     idc_market = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_price_profile, index=timestamps))
@@ -649,12 +674,15 @@ if __name__ == "__main__":
     env = create_env(
         energy_system=energy_system,
         markets=markets,
+        idc_price_data=idc_test_weeks,
+        daa_price_data=daa_test_weeks,
         forecast_horizon_hours=3,
         time_delta_seconds = TIME_DELTA_SECONDS,
         battery_power_kwh=STORAGE_POWER,
         battery_capacity_kwh=STORAGE_CAPACITY,
         max_episode_steps=MAX_EPISODE_STEPS,  # 24 hours with 15 min steps
         start_date=START_DATE,
+        seed=456,
     )
 
     # ── 4. Load the trained model ─────────────────────────────────────────
@@ -663,13 +691,13 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"No model found at {MODEL_PATH}.zip")
 
     model = SAC.load(MODEL_PATH, env=env)
-    print(f"✓  Loaded model from {MODEL_PATH}")
+    print(f"Loaded model from {MODEL_PATH}")
 
     # ── 5. Run evaluation ─────────────────────────────────────────────────
     results = evaluate(
         env=env,
         model=model,
-        n_episodes=3,           # increase to average over multiple runs
+        n_episodes=5,           # increase to average over multiple runs
         deterministic=True,     # always True for eval
         plot=True,
         save_path="idc_daa_eval_report.png",

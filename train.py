@@ -50,6 +50,7 @@ def create_env(
     battery_capacity_kwh: float = 100.0,
     max_episode_steps: int = 96 * 20,
     start_date: pd.Timestamp = START_DATE,
+    seed: Optional[int] = None,
 ) -> TradingEnvironment:
     """Create and validate environment."""
     env = TradingEnvironment(
@@ -64,6 +65,7 @@ def create_env(
         battery_capacity_kwh=battery_capacity_kwh,
         max_episode_steps=max_episode_steps,  # 24 hours with 15 min steps
         start_date=start_date,
+        seed=seed
     )
     
     return env
@@ -137,6 +139,7 @@ def train_ppo_agent(
             battery_capacity_kwh=env.battery_capacity_kwh,
             max_episode_steps=env.max_episode_steps,
             start_date=env.start_date,
+            seed=env.seed
         )])
     if use_vec_normalize:
         eval_env = VecNormalize(
@@ -219,7 +222,8 @@ def train_sac_agent(
     eval_freq: int = 5000,
     checkpoint_freq: int = 10000,
     use_vec_normalize: bool = True,
-    verbose: int = 1
+    verbose: int = 1,
+    seed: Optional[int] = None,
 ) -> SAC:
     """
     Train a SAC agent on the energy trading environment.
@@ -279,6 +283,7 @@ def train_sac_agent(
             battery_capacity_kwh=env.battery_capacity_kwh,
             max_episode_steps=env.max_episode_steps,
             start_date=env.start_date,
+            seed=env.seed
         )])
     if use_vec_normalize:
         eval_env = VecNormalize(
@@ -310,10 +315,19 @@ def train_sac_agent(
     
     # Create SAC model
     # SAC is off-policy: it learns from a replay buffer rather than on-policy rollouts
+
+    from stable_baselines3.common.utils import LinearSchedule
+
+    learning_rate_scheduler = LinearSchedule(
+        start=3e-4,
+        end=1e-5,
+        end_fraction=0.9,
+    )
+
     model = SAC(
         'MlpPolicy',
         vec_env,
-        learning_rate=3e-4,
+        learning_rate=learning_rate_scheduler,
         buffer_size=1_000_000,        # replay buffer capacity
         learning_starts=10_000,       # steps of random exploration before first update
         batch_size=256,               # mini-batch size drawn from the replay buffer
@@ -330,6 +344,7 @@ def train_sac_agent(
         verbose=verbose,
         tensorboard_log=f'{save_path}/logs',
         device='cpu',
+        seed=seed,
     )
     
     print(f"Starting training for {total_timesteps} timesteps...")
@@ -355,340 +370,7 @@ def train_sac_agent(
     print(f"Training completed! Model saved to {save_path}/{model_name}_final")
     
     return model
- 
 
-# def make_markets(idc_prices: np.ndarray, daa_prices: np.ndarray) -> MarketsWrapper:
-#     """
-#     Rebuild all market objects and forecasters from raw price arrays.
- 
-#     Parameters
-#     ----------
-#     idc_prices : np.ndarray  shape (steps,)  — 15-min IDC prices
-#     daa_prices : np.ndarray  shape (hours,)  — hourly DAA prices
-#     """
-#     steps = len(idc_prices)
-#     idc_timestamps = pd.date_range(start=START_DATE, periods=steps, freq='15min')
-#     daa_timestamps = pd.date_range(start=START_DATE, periods=len(daa_prices), freq='h')
- 
-#     idc_market    = IdcMarket(price_profile_per_simulation_time_step=pd.Series(idc_prices, index=idc_timestamps))
-#     idc_forecaster = DataProfileForecaster(idc_prices, time_delta_seconds=900)
- 
-#     daa_market    = DaaMarket(price_profile_per_simulation_time_step=pd.Series(daa_prices, index=daa_timestamps))
-#     daa_forecaster = DataProfileForecaster(np.array(daa_prices), time_delta_seconds=3600)
- 
-#     return MarketsWrapper(
-#         battery_capacity_kwh=STORAGE_CAPACITY,
-#         battery_max_power_kwh=STORAGE_POWER,
-#         intraday_market=idc_market,
-#         idc_price_forcaster=idc_forecaster,
-#         day_ahead_market=daa_market,
-#         daa_price_forecaster=daa_forecaster,
-#         max_steps=steps,
-#     )
- 
- 
-# def build_all_envs(
-#     idc_weeks: np.ndarray,
-#     daa_weeks: np.ndarray,
-#     energy_system: EnergySystem,
-#     use_vec_normalize: bool,
-#     training: bool = True,
-# ) -> list[VecNormalize | DummyVecEnv]:
-#     """
-#     Pre-build one VecEnv per week upfront. Returns a list indexed by week.
- 
-#     Parameters
-#     ----------
-#     idc_weeks       : shape (n_weeks, steps_per_week)
-#     daa_weeks       : shape (n_weeks, hours_per_week)
-#     energy_system   : shared EnergySystem template
-#     use_vec_normalize : wrap each env in VecNormalize
-#     training        : passed to VecNormalize — False freezes running stats (for eval/test)
-#     """
-#     envs = []
-#     n = len(idc_weeks)
-#     for i, (idc, daa) in enumerate(zip(idc_weeks, daa_weeks)):
-#         print(f"  Building env {i+1}/{n}...", end='\r')
-#         steps = len(idc)
-#         markets = make_markets(idc, daa)
-#         env = create_env(
-#             energy_system=energy_system,
-#             markets=markets,
-#             forecast_horizon_hours=3,
-#             time_delta_seconds=TIME_DELTA_SECONDS,
-#             battery_power_kwh=STORAGE_POWER,
-#             battery_capacity_kwh=STORAGE_CAPACITY,
-#             max_episode_steps=steps,
-#             start_date=START_DATE,
-#         )
-#         vec_env = DummyVecEnv([lambda e=env: e])    # capture env in default arg
-#         if use_vec_normalize:
-#             vec_env = VecNormalize(
-#                 vec_env,
-#                 norm_obs=True,
-#                 norm_reward=False,
-#                 clip_obs=10.0,
-#                 clip_reward=10.0,
-#                 training=training,
-#             )
-#         envs.append(vec_env)
-#     print(f"  Built {n} environments.")
-#     return envs
- 
-
-# class WeeklyEvalCallback(BaseCallback):
-#     """
-#     Evaluates the model on each validation week sequentially (n_envs=1 each),
-#     avoiding the DummyVecEnv auto-reset bug that truncates episodes early when
-#     multiple sub-envs finish at different timesteps.
- 
-#     Saves the best model based on mean reward across all val weeks.
-#     """
- 
-#     def __init__(
-#         self,
-#         val_envs: list,
-#         best_model_save_path: str,
-#         log_path: str,
-#         eval_freq: int = 5000,
-#         deterministic: bool = True,
-#         verbose: int = 1,
-#     ):
-#         super().__init__(verbose)
-#         self.val_envs             = val_envs
-#         self.best_model_save_path = best_model_save_path
-#         self.log_path             = log_path
-#         self.eval_freq            = eval_freq
-#         self.deterministic        = deterministic
-#         self.best_mean_reward     = -np.inf
-#         os.makedirs(best_model_save_path, exist_ok=True)
-#         os.makedirs(log_path, exist_ok=True)
- 
-#     def _on_step(self) -> bool:
-#         if self.n_calls % self.eval_freq != 0:
-#             return True
- 
-#         rewards = []
-#         for env in self.val_envs:
-#             obs = env.reset()
-#             done = False
-#             episode_reward = 0.0
-#             while not done:
-#                 action, _ = self.model.predict(obs, deterministic=self.deterministic)
-#                 obs, reward, done, _ = env.step(action)
-#                 episode_reward += reward.item()
-#             rewards.append(episode_reward)
- 
-#         mean_reward = float(np.mean(rewards))
-#         std_reward  = float(np.std(rewards))
- 
-#         # Log to TensorBoard
-#         self.logger.record("eval/mean_reward", mean_reward)
-#         self.logger.record("eval/std_reward",  std_reward)
- 
-#         if self.verbose:
-#             print(f"[WeeklyEvalCallback] step={self.num_timesteps} | "
-#                   f"mean_reward={mean_reward:.4f} ± {std_reward:.4f} "
-#                   f"over {len(self.val_envs)} val weeks")
- 
-#         # Save best model
-#         if mean_reward > self.best_mean_reward:
-#             self.best_mean_reward = mean_reward
-#             self.model.save(os.path.join(self.best_model_save_path, "best_model"))
-#             if self.verbose:
-#                 print(f"  → New best model saved ({mean_reward:.4f})")
- 
-#         return True
- 
- 
-# def train_sac_agent(
-#     energy_system: EnergySystem,
-#     train_idc: np.ndarray,          # shape: (n_train_weeks, steps_per_week)
-#     train_daa: np.ndarray,          # shape: (n_train_weeks, hours_per_week)
-#     val_idc: np.ndarray,            # shape: (n_val_weeks,   steps_per_week)
-#     val_daa: np.ndarray,            # shape: (n_val_weeks,   hours_per_week)
-#     test_idc: np.ndarray,           # shape: (n_test_weeks,  steps_per_week)
-#     test_daa: np.ndarray,           # shape: (n_test_weeks,  hours_per_week)
-#     n_epochs: int = 5,
-#     save_path: str = './models',
-#     model_name: str = 'sac_energy_trading',
-#     eval_freq: int = 5000,
-#     checkpoint_freq: int = 10000,
-#     use_vec_normalize: bool = True,
-#     verbose: int = 1,
-# ) -> SAC:
-#     """
-#     Train a SAC agent using weekly IDC + DAA price episodes.
- 
-#     All environments (train, val, test) are built once before training starts.
-#     Each training iteration simply calls model.set_env() with a pre-built env —
-#     no market or env construction overhead during the training loop.
-#     """
- 
-#     os.makedirs(save_path, exist_ok=True)
-#     os.makedirs(f'{save_path}/checkpoints', exist_ok=True)
-#     os.makedirs(f'{save_path}/logs', exist_ok=True)
- 
-#     steps_per_week = train_idc.shape[1]
- 
-#     # ── Pre-build all environments once ────────────────────────────────────
-#     print("Pre-building training environments...")
-#     train_envs = build_all_envs(train_idc, train_daa, energy_system, use_vec_normalize, training=True)
- 
-#     print("Pre-building validation environments...")
-#     val_envs = build_all_envs(val_idc, val_daa, energy_system, use_vec_normalize, training=False)
- 
-#     print("Pre-building test environments...")
-#     test_envs = build_all_envs(test_idc, test_daa, energy_system, use_vec_normalize, training=False)
- 
-
- 
-#     # ── Callbacks ──────────────────────────────────────────────────────────
-#     eval_callback = WeeklyEvalCallback(
-#         val_envs=val_envs,
-#         best_model_save_path=f'{save_path}/best',
-#         log_path=f'{save_path}/logs',
-#         eval_freq=eval_freq,
-#         deterministic=True,
-#         verbose=verbose,
-#     )
-
-#     checkpoint_callback = CheckpointCallback(
-#         save_freq=checkpoint_freq,
-#         save_path=f'{save_path}/checkpoints',
-#         name_prefix=model_name,
-#         save_replay_buffer=True,
-#         save_vecnormalize=use_vec_normalize,
-#     )
-#     trading_callback = TradingCallback(
-#         log_freq=96,
-#         battery_capacity_kwh=STORAGE_CAPACITY,
-#         verbose=verbose,
-#     )
- 
-#     # ── Model (initialised on week 0) ──────────────────────────────────────
-#     model = SAC(
-#         'MlpPolicy',
-#         train_envs[0],
-#         learning_rate=3e-4,
-#         buffer_size=1_000_000,
-#         learning_starts=10_000,
-#         batch_size=256,
-#         tau=0.005,
-#         gamma=0.99,
-#         train_freq=1,
-#         gradient_steps=1,
-#         ent_coef='auto',
-#         target_update_interval=1,
-#         target_entropy='auto',
-#         use_sde=False,
-#         sde_sample_freq=-1,
-#         policy_kwargs=dict(net_arch=[256, 256]),
-#         verbose=verbose,
-#         tensorboard_log=f'{save_path}/logs',
-#         device='cpu',
-#     )
- 
-#     # ── Training loop ──────────────────────────────────────────────────────
-#     run_name = f"sac_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-#     total_timesteps = n_epochs * len(train_envs) * steps_per_week
-#     print(f"\nTraining for {n_epochs} epochs x {len(train_envs)} weeks "
-#           f"= {total_timesteps:,} total timesteps")
- 
-#     for epoch in range(n_epochs):
-#         shuffled_idx = np.random.permutation(len(train_envs))
- 
-#         for i, week_idx in enumerate(shuffled_idx):
-#             print(f"[epoch {epoch+1}/{n_epochs} | week {i+1}/{len(train_envs)}]")
- 
-#             model.set_env(train_envs[week_idx])     # swap — no construction cost
- 
-#             model.learn(
-#                 total_timesteps=steps_per_week,
-#                 callback=[eval_callback, checkpoint_callback, trading_callback],
-#                 reset_num_timesteps=False,
-#                 tb_log_name=run_name,
-#                 progress_bar=False,
-#             )
- 
-#     # ── Save ───────────────────────────────────────────────────────────────
-#     model.save(f'{save_path}/{model_name}_final')
-#     if use_vec_normalize:
-#         train_envs[0].save(f'{save_path}/{model_name}_vecnormalize.pkl')
-#     print(f"Model saved to '{save_path}/{model_name}_final'")
- 
-#     # ── Test evaluation (once, best checkpoint, never influences training) ──
-#     print("\nEvaluating on held-out test set...")
-#     best_model = SAC.load(f'{save_path}/best/best_model')
-#     test_rewards = []
- 
-#     results = evaluate_policy(best_model, test_envs, deterministic=True)
-#     test_rewards.append(results['mean_reward'])
- 
-#     print(f"Test set — mean reward: {np.mean(test_rewards):.4f} "
-#           f"± {np.std(test_rewards):.4f}  (over {len(test_rewards)} weeks)")
- 
-#     return model
-
-# def evaluate_policy(
-#     model: SAC,
-#     test_envs: list,
-#     deterministic: bool = True,
-#     verbose: int = 1,
-# ) -> dict:
-#     """
-#     Evaluate the policy on each pre-built test environment (one per week).
- 
-#     Parameters
-#     ----------
-#     model       : trained SAC model (or best checkpoint)
-#     test_envs   : list of VecEnvs, one per test week (from build_all_envs)
-#     deterministic : use deterministic actions
-#     verbose     : print per-week results if > 0
- 
-#     Returns
-#     -------
-#     results : dict with keys
-#         'rewards'       — list of total reward per week
-#         'mean_reward'   — mean across weeks
-#         'std_reward'    — std across weeks
-#         'min_reward'    — worst week
-#         'max_reward'    — best week
-#     """
-#     rewards = []
- 
-#     for i, env in enumerate(test_envs):
-#         obs = env.reset()
-#         done = False
-#         episode_reward = 0.0
- 
-#         while not done:
-#             action, _ = model.predict(obs, deterministic=deterministic)
-#             obs, reward, done, _ = env.step(action)
-#             episode_reward += reward.item()
- 
-#         rewards.append(episode_reward)
- 
-#         if verbose:
-#             print(f"  Week {i+1:02d}/{len(test_envs)} | reward: {episode_reward:.4f}")
- 
-#     results = {
-#         'rewards':     rewards,
-#         'mean_reward': float(np.mean(rewards)),
-#         'std_reward':  float(np.std(rewards)),
-#         'min_reward':  float(np.min(rewards)),
-#         'max_reward':  float(np.max(rewards)),
-#     }
- 
-#     print(f"\nTest set results over {len(test_envs)} weeks:")
-#     print(f"  Mean : {results['mean_reward']:>10.4f}")
-#     print(f"  Std  : {results['std_reward']:>10.4f}")
-#     print(f"  Min  : {results['min_reward']:>10.4f}")
-#     print(f"  Max  : {results['max_reward']:>10.4f}")
- 
-#     return results
- 
 
 class InfoLoggerCallback(BaseCallback):
     """
@@ -1010,17 +692,23 @@ def main():
     print("=" * 60)
     print("Multi-Market Energy Trading - PPO Training")
     print("=" * 60)
-    
+    SEED = 6978
+    print(f"Working with seed {SEED}")
+    print("=" * 60)
     # Generate sample price profiles
     print("\n1. Generating price profiles...")
     # price_profiles = create_sample_price_profiles(days=30, time_delta_seconds=900)
-    timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15T')
-    timestamps_daa = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS/4, freq='1H')
+    timestamps = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS, freq='15min')
+    timestamps_daa = pd.date_range(start=START_DATE, periods=MAX_EPISODE_STEPS//4, freq='1h')
 
     from scripts.data_split import load_split
     idc_train_weeks = load_split('data_splits/idc/manifest.json', 'train')
     idc_val_weeks   = load_split('data_splits/idc/manifest.json', 'val')
-    idc_test_weeks  = load_split('data_splits/idc/manifest.json', 'test')
+    for i in range(len(idc_train_weeks)):
+        idc_train_weeks[i] /= 1000
+    for i in range(len(idc_val_weeks)):
+        idc_val_weeks[i] /= 1000
+    # idc_test_weeks  = load_split('data_splits/idc/manifest.json', 'test')
     idc_price_profile = idc_train_weeks[0]  # Use the first training week as the base profile for the IDC market
     
     # idc_price_profile = generate_prices(base_price=80, price_volatility=0.05, max_steps=MAX_EPISODE_STEPS)
@@ -1029,7 +717,11 @@ def main():
     
     daa_train_weeks: list[pd.Series] = load_split("data_splits/daa/manifest.json", "train")  # (n_weeks, steps_per_week)
     daa_val_weeks   = load_split("data_splits/daa/manifest.json", "val")
-    daa_test_weeks  = load_split("data_splits/daa/manifest.json", "test")
+    for i in range(len(daa_train_weeks)):
+        daa_train_weeks[i] /= 1000
+    for i in range(len(daa_val_weeks)):
+        daa_val_weeks[i] /= 1000
+    # daa_test_weeks  = load_split("data_splits/daa/manifest.json", "test")
     day_ahead_prices_hourly = daa_train_weeks[0]
     day_ahead_prices_hourly_eval = daa_val_weeks[0]
 
@@ -1122,6 +814,7 @@ def main():
         battery_capacity_kwh=STORAGE_CAPACITY,
         max_episode_steps=MAX_EPISODE_STEPS,  # 24 hours with 15 min steps
         start_date=START_DATE,
+        seed=SEED,
     )
 
     # Create environment
@@ -1137,6 +830,7 @@ def main():
         battery_capacity_kwh=STORAGE_CAPACITY,
         max_episode_steps=MAX_EPISODE_STEPS,  # 24 hours with 15 min steps
         start_date=START_DATE,
+        seed=SEED
     )
     
     # Check environment
@@ -1181,7 +875,8 @@ def main():
         eval_freq=30_000,
         checkpoint_freq=100_000,
         use_vec_normalize=False,
-        verbose=0
+        verbose=0,
+        seed=SEED,
     )
 
     # model = train_sac_agent(

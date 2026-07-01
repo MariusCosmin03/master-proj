@@ -71,25 +71,30 @@ class TradingCallback(BaseCallback):
 
         # ── Rolling buffers (capped at `window` steps) ───────────────────
         self._idc_reward     = deque(maxlen=window)
+        self._daa_reward     = deque(maxlen=window)
         self._energy_penalty = deque(maxlen=window)
         self._net_reward     = deque(maxlen=window)
         self._soc            = deque(maxlen=window)
-        self._price          = deque(maxlen=window)
-        self._trade          = deque(maxlen=window)
+        self._idc_price          = deque(maxlen=window)
+        self._idc_trade          = deque(maxlen=window)
         self._power_balance  = deque(maxlen=window)
         self._constraint     = deque(maxlen=window)  # 0/1 per step
         self._daa_price      = deque(maxlen=window)
         self._daa_trade      = deque(maxlen=window)
+        self._market_reward = deque(maxlen=window)
 
         # ── Episode accumulators (reset on each episode end) ─────────────
-        self._ep_idc_revenue  = 0.0
-        self._ep_penalty      = 0.0
-        self._ep_violations   = 0
-        self._ep_throughput   = 0.0
-        self._ep_soc_upper    = 0
-        self._ep_soc_lower    = 0
-        self._ep_length       = 0
-        self._total_revenue    = 0.0
+        self._ep_idc_revenue = 0.0
+        self._ep_daa_revenue = 0.0
+        self._ep_idc_reward  = 0.0
+        self._ep_daa_reward  = 0.0
+        self._ep_energy_penalty = 0.0
+        self._ep_violations  = 0
+        self._ep_throughput  = 0.0
+        self._ep_soc_upper   = 0
+        self._ep_soc_lower   = 0
+        self._ep_length      = 0
+        self._total_revenue   = 0.0
 
     # ─────────────────────────────────────────────────────────────────────
     def _on_step(self) -> bool:
@@ -107,36 +112,44 @@ class TradingCallback(BaseCallback):
         """Push one step's info into all buffers and episode accumulators."""
 
         idc_r    = float(info.get("idc_reward",       0.0))
+        daa_r    = float(info.get("daa_reward",       0.0))
         energy_r = float(info.get("energy_reward",    0.0))
         soc      = float(info.get("soc",              0.5))
-        price    = float(info.get("price",            0.0))
-        trade    = float(info.get("trade",            0.0))
+        idc_price    = float(info.get("idc_price",            0.0))
+        idc_trade    = float(info.get("idc_trade",            0.0))
         balance  = float(info.get("fixed_power_balance", 0.0))
         c_fired  = int(info.get("constraint_fired",   0))
         daa_price = float(info.get("daa_price", 0.0))
         daa_trade = float(info.get("daa_trade", 0.0))
+        initial_reward = float(info.get("initial_reward", 0.0))
+        adjusted_reward = float(info.get("market_reward", 0.0))
 
         # ── Rolling buffers ───────────────────────────────────────────────
         self._idc_reward.append(idc_r)
+        self._daa_reward.append(daa_r)
         self._energy_penalty.append(energy_r)
-        self._net_reward.append(idc_r + energy_r)
+        self._net_reward.append(idc_r + daa_r + energy_r)
         self._soc.append(soc)
-        self._price.append(price)
-        self._trade.append(trade)
+        self._idc_price.append(idc_price)
+        self._idc_trade.append(idc_trade)
         self._power_balance.append(balance)
         self._constraint.append(c_fired)
         self._daa_price.append(daa_price)
         self._daa_trade.append(daa_trade)
+        self._market_reward.append(adjusted_reward)
 
         # ── Episode accumulators ──────────────────────────────────────────
-        self._ep_idc_revenue += idc_r
-        self._ep_penalty     += energy_r
+        self._ep_idc_reward += idc_r
+        self._ep_daa_reward += daa_r
+        self._ep_idc_revenue += (idc_price * idc_trade)
+        self._ep_daa_revenue += (daa_price * daa_trade)
+        self._ep_energy_penalty += energy_r
         self._ep_violations  += c_fired
-        self._ep_throughput  += abs(trade)
+        self._ep_throughput  += abs(idc_trade + daa_trade)
         self._ep_soc_upper   += int(soc > 0.9)
         self._ep_soc_lower   += int(soc < 0.1)
         self._ep_length      += 1
-        self._total_revenue   += ((price * trade) + (daa_price * daa_trade))  # Cumulative net revenue across episode (for quick checks)
+        self._total_revenue   += ((idc_price * idc_trade) + (daa_price * daa_trade))  # Cumulative net revenue across episode (for quick checks)
 
         # ── Flush episode metrics on episode end ──────────────────────────
         if info.get("episode") or info.get("terminal_observation") is not None:
@@ -147,7 +160,7 @@ class TradingCallback(BaseCallback):
     def _log_rolling(self) -> None:
         """Write rolling-window aggregates to TensorBoard."""
 
-        trade_arr   = np.array(self._trade)
+        trade_arr   = np.array(self._idc_trade + self._daa_trade)
         soc_arr     = np.array(self._soc)
         balance_arr = np.array(self._power_balance)
         constraint_arr = np.array(self._constraint)
@@ -162,12 +175,20 @@ class TradingCallback(BaseCallback):
                            float(np.mean(self._idc_reward)))
         self.logger.record("trading/idc_reward_sum",
                            float(np.sum(self._idc_reward)))
+        self.logger.record("trading/daa_reward_mean",
+                           float(np.mean(self._daa_reward)))
+        self.logger.record("trading/daa_reward_sum",
+                           float(np.sum(self._daa_reward)))
         self.logger.record("trading/energy_penalty_mean",
                            float(np.mean(self._energy_penalty)))
         self.logger.record("trading/energy_penalty_sum",
                            float(np.sum(self._energy_penalty)))
         self.logger.record("trading/net_reward_mean",
                            float(np.mean(self._net_reward)))
+        self.logger.record("trading/market_reward_mean",
+                           float(np.mean(self._market_reward)))
+        self.logger.record("trading/market_reward_sum",
+                           float(np.sum(self._market_reward)))
 
         # ── Constraint violations ─────────────────────────────────────────
         self.logger.record("trading/constraint_rate_pct",
@@ -183,7 +204,7 @@ class TradingCallback(BaseCallback):
 
         # ── Price ─────────────────────────────────────────────────────────
         self.logger.record("trading/price_mean",
-                           float(np.mean(self._price)))
+                           float(np.mean(self._idc_price)))
 
         # ── Trade behaviour ───────────────────────────────────────────────
         self.logger.record("trading/trade_mean",
@@ -203,8 +224,8 @@ class TradingCallback(BaseCallback):
         self.logger.record("trading/power_balance_abs_mean",
                            float(np.abs(balance_arr).mean()))
 
-        if self.verbose > 0:
-            self._print_rolling(trade_arr, soc_arr, constraint_arr)
+        # if self.verbose > 0:
+        #     self._print_rolling(trade_arr, soc_arr, constraint_arr)
 
     # ─────────────────────────────────────────────────────────────────────
     def _log_episode(self) -> None:
@@ -213,8 +234,10 @@ class TradingCallback(BaseCallback):
         n_cycles = (self._ep_throughput / (2 * cap_mwh)) if cap_mwh > 0 else 0.0
 
         self.logger.record("episode/total_idc_revenue",       self._ep_idc_revenue)
-        self.logger.record("episode/total_penalty",           self._ep_penalty)
-        self.logger.record("episode/net_profit",              self._ep_idc_revenue + self._ep_penalty)
+        self.logger.record("episode/total_daa_revenue",       self._ep_daa_revenue)
+        self.logger.record("episode/total_idc_reward",        self._ep_idc_reward)
+        self.logger.record("episode/total_daa_reward",        self._ep_daa_reward)
+        self.logger.record("episode/total_energy_penalty",    self._ep_energy_penalty)
         self.logger.record("episode/n_constraint_violations", self._ep_violations)
         self.logger.record("episode/n_cycles",                n_cycles)
         self.logger.record("episode/soc_upper_violations",    self._ep_soc_upper)
@@ -226,8 +249,8 @@ class TradingCallback(BaseCallback):
             print(
                 f"\n  ▸ Episode end  |  "
                 f"Total revenue: €{self._total_revenue:>10.2f}  |  "
-                f"Penalty: €{self._ep_penalty:>10.2f}  |  "
-                f"Net: €{self._ep_idc_revenue + self._ep_penalty:>10.2f}  |  "
+                f"Penalty: €{self._ep_energy_penalty:>10.2f}  |  "
+                f"Net: €{self._ep_idc_revenue + self._ep_daa_revenue - self._ep_energy_penalty:>10.2f}  |  "
                 f"Violations: {self._ep_violations}  |  "
                 f"Cycles: {n_cycles:.1f}"
             )
@@ -235,7 +258,10 @@ class TradingCallback(BaseCallback):
     # ─────────────────────────────────────────────────────────────────────
     def _reset_episode(self) -> None:
         self._ep_idc_revenue = 0.0
-        self._ep_penalty     = 0.0
+        self._ep_daa_revenue = 0.0
+        self._ep_idc_reward  = 0.0
+        self._ep_daa_reward  = 0.0
+        self._ep_energy_penalty = 0.0
         self._ep_violations  = 0
         self._ep_throughput  = 0.0
         self._ep_soc_upper   = 0
