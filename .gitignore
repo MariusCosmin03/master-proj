@@ -7,6 +7,11 @@ models/idc_only/**
 !models/idc_only/logs/
 !models/idc_only/logs/**
 
+!models/idc_daa/
+models/idc_daa/**
+!models/idc_daa/logs/
+!models/idc_daa/logs/**
+
 *.zip
 *.pkl
 .vscode/
