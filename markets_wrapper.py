@@ -277,7 +277,7 @@ class MarketsWrapper:
 
 
         next_day_prices = self.daa._get_hourly_prices_for_tomorrow()
-        next_day_prices = self.forecasters.daa.predict(24) # Forecast of the next 24 hours
+        # next_day_prices = self.forecasters.daa.predict(24) # Forecast of the next 24 hours
         if next_day_prices is None or len(next_day_prices) == 0 or np.isnan(next_day_prices).any():
             next_day_prices = np.zeros(24)  # Default to zeros if no data available
         current_daa_promise = self._current_daa_promise[0]
@@ -286,6 +286,15 @@ class MarketsWrapper:
 
         # Placeholder for retrieving the state of the day-ahead market
         return np.array([current_daa_promise] + list(next_day_prices), dtype=np.float32)
+
+    def get_daa_current_promise(self):
+        if self._current_daa_promise is None or len(self._current_daa_promise) == 0:
+            if self.time_step > 100:
+                # print(f"Warning: No current DAA promise available at time step {self.time_step}. Returning 0.")
+                # print(self._current_daa_promise)
+                return self._pending_daa_schedule[0]
+            return 0.0  # Return 0 if there is no current promise
+        return self._current_daa_promise[0]  # Return the current promised schedule for DAA
 
     def reset_prices(self, new_idc_prices, new_daa_prices):
         """

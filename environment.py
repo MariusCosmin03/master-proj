@@ -103,7 +103,7 @@ class TradingEnvironment(gym.Env):
         market_info["initial_soc"] = energy_state["components_states"]["battery"]["soc"]
 
 
-        assert 0.4 <= energy_state["components_states"]["battery"]["soc"] <= 0.6, \
+        # assert 0.4 <= energy_state["components_states"]["battery"]["soc"] <= 0.6, \
         f"Battery SoC did not reset: {energy_state['components_states']['battery']['soc']}"
 
         # print(energy_state, market_state)
@@ -120,6 +120,25 @@ class TradingEnvironment(gym.Env):
         action = action * self.battery_power_kwh / (4 * 2)  # Scale action to actual kWh for 15 min step, and limit to battery power
                                                             # Divide by 4 for 15 min steps, and by 2 for bidirectional power (charge/discharge)
 
+        ########################################################## LIMIT ACTION BEFORE REACHING THE MARKET ###################################################################
+        #   NOT WORKING AS EXPECTED, NEEDS TO BE FIXED. CURRENTLY LIMITING ACTION BASED ON BATTERY SOC AND DAA PROMISE, BUT NOT ACCOUNTING FOR MARKET EXECUTION GAP.
+        # original_action = action.copy()  # Keep a copy of the original action for logging
+        # check = 0
+        # battery_soc = self.energy_system.get_component_by_label("battery").get_state()["soc"]
+        # idc_action = action[0]  # IDC action is the first element of the action array
+        # current_daa_promise = self.markets.get_daa_current_promise()  # Get the current promised schedule from DAA  
+        # current_battery_capacity = self.battery_capacity_kwh * battery_soc  # Current energy in the battery in kWh
+        # if current_battery_capacity + (idc_action + current_daa_promise) > self.battery_capacity_kwh:
+        #     # print(idc_action, current_battery_capacity, current_daa_promise)
+        #     check = 1
+        #     idc_action = self.battery_capacity_kwh - current_battery_capacity - current_daa_promise  # Limit to max capacity
+        # elif current_battery_capacity + (idc_action + current_daa_promise) < 0:
+        #     # print(idc_action, current_battery_capacity, current_daa_promise)
+        #     check = 1
+        #     idc_action = -current_battery_capacity - current_daa_promise  # Limit to min capacity (0)
+        
+        # action[0] = idc_action  # Update the action with the limited IDC action
+        #######################################################################################################################################################################
         # 3. Step the Markets with the market action(trades) -> market state + reward
         market_state, market_reward, market_done, market_info = self.markets.step(action)
 
@@ -152,6 +171,7 @@ class TradingEnvironment(gym.Env):
         if energy_state is not None:
             soc = energy_state["components_states"]["battery"]["soc"]
 
+       
         # Soft quadratic SoC penalty — activates near limits, zero in safe zone
         # soc_penalty = 0.0
         # if soc > 0.85:
@@ -172,6 +192,10 @@ class TradingEnvironment(gym.Env):
             print("Warning: Energy state is None. Using market state only for observation and zero reward. Time step:", self.current_step, "Energy done was:", energy_system_done)
             soc = 0  # Default SoC if energy state is unavailable
             combined_state = np.concatenate([np.array([soc]), market_state])  # Placeholder if energy state is unavailable
+        # if check != 0 and soc_violation == 1:
+        #     print(f"Warning: Action was limited due to battery capacity constraints. Original action: {original_action}, Limited action: {idc_action}, SoC: {soc:.3f}, Current DAA promise: {current_daa_promise:.3f}, Current battery capacity: {current_battery_capacity:.3f}")
+        #     print(f"Current step: {self.current_step}, Physical change: {physical_change:.3f}, Actual change: {actual_change:.3f}, Execution gap: {execution_gap:.3f}, Constraint fired: {soc_violation}")
+        #     print(f"Market info: {market_info}")
 
         reward = float(energy_reward + market_reward)
 

@@ -38,6 +38,7 @@ STORAGE_CAPACITY = 1000.0  # kW
 START_DATE = pd.Timestamp("2024-01-01 00:00:00")
 TIME_DELTA_SECONDS = 900  # 15 minutes
 MAX_EPISODE_STEPS = 96 * 7  # 7 days with 15 min steps
+INITIAL_SOC = 0.  # Initial state of charge (50%)
 
 def create_env(
     energy_system: EnergySystem,
@@ -692,7 +693,7 @@ def main():
     print("=" * 60)
     print("Multi-Market Energy Trading - PPO Training")
     print("=" * 60)
-    SEED = 6978
+    SEED = 2378
     print(f"Working with seed {SEED}")
     print("=" * 60)
     # Generate sample price profiles
@@ -734,6 +735,7 @@ def main():
     day_ahead_market_eval = DaaMarket(price_profile_per_simulation_time_step=pd.Series(day_ahead_prices_hourly_eval, index=timestamps_daa))
     daa_price_forecaster_eval = DataProfileForecaster(forecast_data=day_ahead_prices_hourly_eval,
                                          time_delta_seconds=3600)
+
     
     # Configure markets
     print("\n2. Configuring markets...")
@@ -783,7 +785,7 @@ def main():
                                            time_delta_seconds=900,
                                            nom_power=STORAGE_POWER,
                                            capacity=STORAGE_CAPACITY,
-                                           initial_soc=0.5,
+                                           initial_soc=INITIAL_SOC,
                                            eta_charge=1,
                                            eta_discharge=1,
                                            )
@@ -797,7 +799,7 @@ def main():
                                                 time_delta_seconds=900,
                                                 nom_power=STORAGE_POWER,
                                                 capacity=STORAGE_CAPACITY,
-                                                initial_soc=0.5,
+                                                initial_soc=INITIAL_SOC,
                                                 eta_charge=1,
                                                 eta_discharge=1,
                                                 )
