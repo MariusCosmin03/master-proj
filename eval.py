@@ -164,7 +164,9 @@ def evaluate(
     # ── Average trajectories across episodes ──────────────────────────────
     def _avg(key): return np.mean([e[key] for e in all_episodes], axis=0)
     data = all_episodes[2].copy()  # Use the last episode as a template for keys
-    
+
+    for x in all_episodes:
+        print(f"Episode revenue: {x['total_revenue'].sum():.2f} €, penalty: {x['energy_penalty'].sum():.2f} €, IDC revenue: {x['idc_revenue'].sum():.2f} €, DAA revenue: {x['daa_revenue'].sum():.2f} €")
     # data = {k: _avg(k) for k in all_episodes[0]}
 
     # ── Compute metrics ───────────────────────────────────────────────────
@@ -647,8 +649,8 @@ if __name__ == "__main__":
         battery_max_power_kwh=STORAGE_POWER,
         intraday_market=idc_market,
         idc_price_forcaster=idc_price_forcaster,  # Placeholder, can be set to actual forecaster instance,
-        day_ahead_market=day_ahead_market,
-        daa_price_forecaster=daa_price_forecaster,
+        day_ahead_market=None, # day_ahead_market, # None
+        daa_price_forecaster=None, # daa_price_forecaster, # None
         max_steps=MAX_EPISODE_STEPS
     )
 
@@ -659,7 +661,7 @@ if __name__ == "__main__":
                                            time_delta_seconds=900,
                                            nom_power=STORAGE_POWER,
                                            capacity=STORAGE_CAPACITY,
-                                           initial_soc=0.5,
+                                           initial_soc=0,
                                            eta_charge=1,
                                            eta_discharge=1,
                                            )
@@ -675,7 +677,7 @@ if __name__ == "__main__":
         energy_system=energy_system,
         markets=markets,
         idc_price_data=idc_test_weeks,
-        daa_price_data=daa_test_weeks,
+        daa_price_data=None, # daa_test_weeks,
         forecast_horizon_hours=3,
         time_delta_seconds = TIME_DELTA_SECONDS,
         battery_power_kwh=STORAGE_POWER,
@@ -683,6 +685,7 @@ if __name__ == "__main__":
         max_episode_steps=MAX_EPISODE_STEPS,  # 24 hours with 15 min steps
         start_date=START_DATE,
         seed=456,
+        eval=True,
     )
 
     # ── 4. Load the trained model ─────────────────────────────────────────
@@ -697,7 +700,7 @@ if __name__ == "__main__":
     results = evaluate(
         env=env,
         model=model,
-        n_episodes=5,           # increase to average over multiple runs
+        n_episodes=9,           # increase to average over multiple runs
         deterministic=True,     # always True for eval
         plot=True,
         save_path="idc_daa_eval_report.png",

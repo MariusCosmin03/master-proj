@@ -33,7 +33,7 @@ class TradingEnvironment(gym.Env):
         energy_system: EnergySystem,
         markets: MarketsWrapper,
         idc_price_data: list[pd.Series],
-        daa_price_data: list[pd.Series],
+        daa_price_data: list[pd.Series] | None = None,
         forecast_horizon_hours: int = 3,
         time_delta_seconds: int = 900,
         battery_power_kwh: float = 10.0,
@@ -41,11 +41,14 @@ class TradingEnvironment(gym.Env):
         max_episode_steps: int = 31 * 96,  # 24 hours with 15 min steps
         start_date: pd.Timestamp = pd.Timestamp("2024-01-01 00:00:00"),
         seed: Optional[int] = None,
+        has_daa: bool = False,
+        eval:bool = False,
         ):
         super(TradingEnvironment, self).__init__()
         # self.data = data
         # self.forecaster = forecaster
         self.seed = seed
+        
         self.energy_system = energy_system
         self.markets = markets
         self.current_step = 0
@@ -61,13 +64,23 @@ class TradingEnvironment(gym.Env):
 
         self.idc_prices = idc_price_data
         self.daa_prices = daa_price_data
+        
+        self.eval = eval
+        self.eval_counter = 0
+        self.has_daa = has_daa
+
+        if self.daa_prices is not None:
+            self.has_daa = True
 
         # Define action and observation space
         # ----- Action Space -----
         # [idc_volume_kw] over the next 3 hours (12 time steps of 15 min each)
+        action_space = 1
+        if self.has_daa:
+            action_space += 1
         self.action_space = spaces.Box(
-            low = np.array([-1] * 2, dtype=np.float64),
-            high = np.array([1] * 2, dtype=np.float64),
+            low = np.array([-1] * action_space, dtype=np.float64),
+            high = np.array([1] * action_space, dtype=np.float64),
             dtype = np.float64
         )
 
@@ -82,7 +95,9 @@ class TradingEnvironment(gym.Env):
         # - Forecasted prices for next day (24): Hourly prices for the next day from DAA (24)
         # - Current DAA promise(1): The current promised schedule from DAA from the previous day (1)
 
-        obs_dim = 1 + (1+ 2 * 2) + (3 + 0) + (4 * 24 + 0) + (24) + (1)  # + 2
+        obs_dim = 1 + (1+ 2 * 2) + (3 + 0) + (4 * 24 + 0)  # + 2
+        if self.has_daa:
+            obs_dim += 24 + 1  # 24 hourly forecasts + current DAA promise
         self.markets.idc_horizon_length = 4 * 24  # 24 hours ahead with 15 min intervals
         self.observation_space = spaces.Box(
             low = -np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float64
@@ -342,7 +357,10 @@ class TradingEnvironment(gym.Env):
         """
         new_starting_date = np.random.randint(0, len(self.idc_prices) - self.max_episode_steps)
         new_idc_prices = self.idc_prices[new_starting_date:new_starting_date + self.max_episode_steps]
-        new_daa_prices = self.daa_prices[new_starting_date:new_starting_date + self.max_episode_steps//4]  # Assuming DAA prices are hourly
+        if self.has_daa:
+            new_daa_prices = self.daa_prices[new_starting_date:new_starting_date + self.max_episode_steps//4]  # Assuming DAA prices are hourly
+        else:
+            new_daa_prices = None
         self.markets.reset_prices(new_idc_prices, new_daa_prices)
         self.energy_system.time_index = new_idc_prices.index  # Update the energy system's time index to match the new prices
 
@@ -351,9 +369,15 @@ class TradingEnvironment(gym.Env):
         Reset the market prices to new values based on a random starting date, ensuring that the starting date aligns with discrete time steps.
         """
         idx = np.random.randint(0, len(self.idc_prices))
-
+        if self.eval:
+            idx = self.eval_counter % len(self.idc_prices)
+            self.eval_counter += 1
+            print(f"Evaluation mode: Start date {self.idc_prices[idx].index[0]}.")
         new_idc_prices = self.idc_prices[idx]
-        new_daa_prices = self.daa_prices[idx]
+        if self.has_daa:
+            new_daa_prices = self.daa_prices[idx]
+        else:
+            new_daa_prices = None
         self.markets.reset_prices(new_idc_prices, new_daa_prices)
         self.energy_system._time_index = new_idc_prices.index  # Update the energy system's time index to match the new prices
 

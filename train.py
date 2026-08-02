@@ -52,6 +52,7 @@ def create_env(
     max_episode_steps: int = 96 * 20,
     start_date: pd.Timestamp = START_DATE,
     seed: Optional[int] = None,
+    eval: bool = False
 ) -> TradingEnvironment:
     """Create and validate environment."""
     env = TradingEnvironment(
@@ -66,7 +67,8 @@ def create_env(
         battery_capacity_kwh=battery_capacity_kwh,
         max_episode_steps=max_episode_steps,  # 24 hours with 15 min steps
         start_date=start_date,
-        seed=seed
+        seed=seed,
+        eval=eval,
     )
     
     return env
@@ -728,13 +730,12 @@ def main():
 
     # day_ahead_prices_hourly_eval = day_ahead_prices_hourly.iloc[:, 0] + np.random.normal(0, 0.01, size=day_ahead_prices_hourly.shape[0])  # Slightly different profile for evaluation
 
-    day_ahead_market = DaaMarket(price_profile_per_simulation_time_step=pd.Series(day_ahead_prices_hourly, index=timestamps_daa))
-    daa_price_forecaster = DataProfileForecaster(forecast_data=day_ahead_prices_hourly,
-                                         time_delta_seconds=3600)
-    
-    day_ahead_market_eval = DaaMarket(price_profile_per_simulation_time_step=pd.Series(day_ahead_prices_hourly_eval, index=timestamps_daa))
-    daa_price_forecaster_eval = DataProfileForecaster(forecast_data=day_ahead_prices_hourly_eval,
-                                         time_delta_seconds=3600)
+    day_ahead_market = None
+    daa_price_forecaster = None
+    day_ahead_market_eval = None
+    daa_price_forecaster_eval = None
+    daa_train_weeks = None
+    daa_val_weeks = None
 
     
     # Configure markets
